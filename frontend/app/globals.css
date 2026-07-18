@@ -11,3 +11,9 @@ body { @apply bg-bg text-txt; font-family: 'Archivo', system-ui, sans-serif; }
 input, select { @apply bg-panel2 border border-line2 rounded-lg px-3 py-1.5 font-mono text-sm focus:outline-none focus:border-brass; }
 th { @apply text-dim text-left text-[11px] font-medium py-2 px-2 border-b border-line tracking-wide; }
 td { @apply py-2 px-2 border-b border-line font-mono text-[13px] whitespace-nowrap; }
+.tv-fill,
+.tv-fill > div,
+.tv-fill iframe {
+  height: 100% !important;
+  width: 100% !important;
+}

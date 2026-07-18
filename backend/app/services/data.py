@@ -3,10 +3,30 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
 from ..db import q, engine
-from ..config import CANDLE_STALE_HOURS
+from ..config import CANDLE_STALE_HOURS, FX_STALE_MINUTES, USD_INR_FALLBACK
+
+BSE_OVERRIDE = {"HDFCBANK"}   # symbols with bad Yahoo NSE data → use BSE feed
+
+_fx_cache = {"rate": None, "at": None}
+
+def usd_inr_rate() -> float:
+    """Spot USD→INR rate, cached in-process for FX_STALE_MINUTES."""
+    now = datetime.now(timezone.utc)
+    if _fx_cache["rate"] and now - _fx_cache["at"] < timedelta(minutes=FX_STALE_MINUTES):
+        return _fx_cache["rate"]
+    try:
+        info = yf.Ticker("INR=X").info or {}
+        rate = info.get("regularMarketPrice") or info.get("previousClose")
+        if rate:
+            _fx_cache["rate"], _fx_cache["at"] = float(rate), now
+    except Exception:
+        pass  # serve stale/fallback rate if yahoo hiccups
+    return _fx_cache["rate"] or USD_INR_FALLBACK
 
 def yf_symbol(symbol: str, market: str) -> str:
-    return f"{symbol}.NS" if market == "IN" else symbol
+    if market == "IN":
+        return f"{symbol}.BO" if symbol in BSE_OVERRIDE else f"{symbol}.NS"
+    return symbol
 
 def get_symbol(symbol: str) -> dict:
     rows = q("SELECT * FROM symbols WHERE symbol=:s", s=symbol)
@@ -66,14 +86,33 @@ def get_candles(symbol: str, limit: int = 500, auto: bool = True) -> pd.DataFram
 
 def refresh_fundamentals(symbol: str) -> dict:
     meta = get_symbol(symbol)
-    info = yf.Ticker(yf_symbol(symbol, meta["market"])).info or {}
+    candidates = [yf_symbol(symbol, meta["market"])]
+    if meta["market"] == "IN":
+        first = candidates[0]
+        candidates.append(f"{symbol}.BO" if first.endswith(".NS") else f"{symbol}.NS")
+    info, last_err = {}, None
+    for ysym in candidates:
+        try:
+            info = yf.Ticker(ysym).info or {}
+        except Exception as e:
+            last_err = e
+            info = {}
+            continue
+        if info.get("trailingPE") or info.get("marketCap"):
+            break
+    if not (info.get("trailingPE") or info.get("marketCap")):
+        # Don't overwrite a previously-good cache row with nulls, and don't stamp
+        # fundamentals_at=now() — that would make a real failure look like a
+        # freshly-confirmed "no data available" instead of something to retry.
+        tried = ", ".join(candidates)
+        raise RuntimeError(f"no fundamentals for {symbol} (tried {tried})") from last_err
     vals = dict(
         pe=info.get("trailingPE"),
         roe=(info.get("returnOnEquity") or 0) * 100 or None,
         de=(info.get("debtToEquity") or 0) / 100 or None,   # yahoo reports in %
         rev_growth=(info.get("revenueGrowth") or 0) * 100 or None,
         mcap=info.get("marketCap"),
-        div_yield=(info.get("dividendYield") or 0) * 100 or None,
+        div_yield=round(float(info.get("dividendYield") or 0), 2) or None,
     )
     q("""UPDATE symbols SET pe=:pe, roe=:roe, de=:de, rev_growth=:rev_growth,
          mcap=:mcap, div_yield=:div_yield, fundamentals_at=now() WHERE symbol=:s""",

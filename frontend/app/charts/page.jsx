@@ -18,6 +18,8 @@ function ChartsInner() {
     api("/api/symbols").then((all) => setF(all.find((x) => x.symbol === symbol))).catch(() => {});
   }, [symbol]);
 
+  const market = syms.find((x) => x.symbol === symbol)?.market || "IN";
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
@@ -25,10 +27,12 @@ function ChartsInner() {
         <select value={symbol} onChange={(e) => setSymbol(e.target.value)}>
           {syms.map((s) => <option key={s.symbol} value={s.symbol}>{s.symbol} · {s.market}</option>)}
         </select>
-        <button className="ghost" onClick={() => api(`/api/fundamentals/${symbol}/refresh`, { method: "POST" }).then(() => location.reload())}>
+        <button className="ghost" onClick={() => api(`/api/fundamentals/${symbol}/refresh`, { method: "POST" })
+          .then(() => location.reload())
+          .catch((e) => alert(`Fundamentals refresh failed: ${e.message}`))}>
           ↻ Refresh fundamentals</button>
       </div>
-      <TVChart symbol={symbol} />
+      <TVChart symbol={symbol} market={market} />
       <div className="grid md:grid-cols-3 gap-4">
         <div className="card text-sm">
           <h3 className="font-semibold mb-2">Fundamentals (yfinance)</h3>

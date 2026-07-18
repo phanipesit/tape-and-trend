@@ -4,8 +4,9 @@ import Link from "next/link";
 import { api, fmt } from "../../lib/api";
 
 export default function Screener() {
-  const [f, setF] = useState({ max_pe: 60, min_roe: 0, max_de: 5, rsi_lo: 0, rsi_hi: 100, above_ema50: false, market: "" });
+  const [f, setF] = useState({ max_pe: 60, min_roe: 0, max_de: 5, rsi_lo: 0, rsi_hi: 100, min_rvol: 0, above_ema50: false, market: "" });
   const [rows, setRows] = useState([]);
+  const [refreshErrors, setRefreshErrors] = useState([]);
   const run = useCallback(() => {
     const p = new URLSearchParams(Object.entries(f).filter(([, v]) => v !== "" && v !== false));
     api(`/api/screener?${p}`).then(setRows).catch(() => {});
@@ -16,7 +17,7 @@ export default function Screener() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-bold">Screener</h1>
-      <p className="text-mut text-sm">Fundamentals come from yfinance — hit "Refresh all fundamentals" once after setup, then whenever you want fresh ratios.</p>
+      <p className="text-mut text-sm">Sorted by conviction score. RVOL = today's volume ÷ 20-day average — above 1.5 means unusual activity.</p>
       <div className="card flex flex-wrap gap-3 items-end text-xs">
         <label className="flex flex-col gap-1 text-mut">Market
           <select value={f.market} onChange={set("market")}><option value="">All</option><option value="IN">India</option><option value="US">US</option></select></label>
@@ -25,12 +26,22 @@ export default function Screener() {
         <label className="flex flex-col gap-1 text-mut">Max D/E<input type="number" step="0.1" className="w-20" value={f.max_de} onChange={set("max_de")} /></label>
         <label className="flex flex-col gap-1 text-mut">RSI ≥<input type="number" className="w-16" value={f.rsi_lo} onChange={set("rsi_lo")} /></label>
         <label className="flex flex-col gap-1 text-mut">RSI ≤<input type="number" className="w-16" value={f.rsi_hi} onChange={set("rsi_hi")} /></label>
+        <label className="flex flex-col gap-1 text-mut">Min RVOL<input type="number" step="0.1" className="w-16" value={f.min_rvol} onChange={set("min_rvol")} /></label>
         <label className="flex items-center gap-2 text-mut pb-1"><input type="checkbox" checked={f.above_ema50} onChange={set("above_ema50")} />Above EMA50</label>
-        <button className="ghost" onClick={() => api("/api/fundamentals/refresh-all", { method: "POST" }).then(run)}>↻ Refresh all fundamentals</button>
+        <button className="ghost" onClick={() => api("/api/fundamentals/refresh-all", { method: "POST" }).then((done) => {
+          setRefreshErrors(Object.entries(done).filter(([, v]) => v?.error).map(([sym, v]) => `${sym}: ${v.error}`));
+          run();
+        })}>↻ Refresh all fundamentals</button>
       </div>
+      {refreshErrors.length > 0 && (
+        <div className="card text-xs text-down space-y-1">
+          <p className="font-semibold">Fundamentals refresh failed for {refreshErrors.length} symbol(s):</p>
+          {refreshErrors.map((e) => <p key={e}>{e}</p>)}
+        </div>
+      )}
       <div className="card overflow-x-auto">
         <table className="w-full"><thead><tr>
-          <th>SYMBOL</th><th>SECTOR</th><th>LAST</th><th>P/E</th><th>ROE%</th><th>D/E</th><th>RSI</th><th>TREND</th>
+          <th>SYMBOL</th><th>SECTOR</th><th>LAST</th><th>P/E</th><th>ROE%</th><th>D/E</th><th>RSI</th><th>RVOL</th><th>TREND</th><th>SCORE</th>
         </tr></thead><tbody>
           {rows.map((r) => (
             <tr key={r.symbol}>
@@ -40,9 +51,11 @@ export default function Screener() {
               <td className={r.roe >= 15 ? "text-up" : ""}>{fmt(r.roe, 1)}</td>
               <td className={r.de > 2 ? "text-down" : ""}>{fmt(r.de, 2)}</td>
               <td className={r.rsi < 32 ? "text-up" : r.rsi > 72 ? "text-down" : ""}>{fmt(r.rsi, 0)}</td>
+              <td className={r.rvol >= 1.5 ? "text-brass" : ""}>{fmt(r.rvol, 2)}</td>
               <td className={r.trend === "UP" ? "text-up" : "text-down"}>{r.trend}</td>
+              <td className="text-brass">{fmt(r.score, 1)}</td>
             </tr>))}
-          {rows.length === 0 && <tr><td colSpan={8} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={10} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
         </tbody></table>
       </div>
     </div>

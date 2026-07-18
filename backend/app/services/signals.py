@@ -26,11 +26,21 @@ def analyse(symbol: str) -> dict:
     if i.c < i.bb_lo:
         sig.append({"type": "WATCH", "why": "Close below lower Bollinger band (stretched)"})
     a = float(i.atr14)
+    rvol = float(i.v / i.vol20) if i.vol20 else 1.0
+    # conviction score: strong signals weigh 2, watch weighs 1, unusual volume adds up to 3
+    score = sum(2 if s["type"] in ("BUY", "SELL") else 1 for s in sig) + min(rvol, 3.0)
     return {
         "symbol": symbol, "close": float(i.c),
         "rsi": round(float(i.rsi14), 1), "trend": "UP" if i.c > i.sma200 else "DOWN",
         "ema20": float(i.ema20), "ema50": float(i.ema50),
+        "rvol": round(rvol, 2), "score": round(score, 2),
         "atr": a, "entry": float(i.c),
         "stop": float(i.c - 1.5 * a), "target": float(i.c + 3 * a),
         "signals": sig,
     }
+
+def latest_rsi(symbol: str):
+    df = get_candles(symbol)
+    if len(df) < 20:
+        return None
+    return float(enrich(df).iloc[-1].rsi14)

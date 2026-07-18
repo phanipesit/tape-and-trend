@@ -10,12 +10,10 @@ export async function api(path, opts = {}) {
   return res.json();
 }
 
-export const tvSymbol = (s) => {
-  const NSE = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","SBIN","ITC","LT","BHARTIARTL","TATAMOTORS"];
-  const NASDAQ = ["AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA"];
-  if (NSE.includes(s)) return `NSE:${s}`;
-  if (NASDAQ.includes(s)) return `NASDAQ:${s}`;
-  return `NYSE:${s}`;
-};
+// TradingView symbol mapping — no hardcoded lists.
+// US: bare symbol (TradingView resolves NYSE/NASDAQ itself).
+// India: BSE:<symbol> (free widgets serve BSE reliably; prices ≈ NSE).
+export const tvSymbol = (s, market) => (market === "IN" ? `BSE:${s}` : s);
+
 export const fmt = (n, dp = 2) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: dp, minimumFractionDigits: dp });
