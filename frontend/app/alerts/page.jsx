@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { api, fmt } from "../../lib/api";
 
 const CONDS = [
@@ -7,10 +8,11 @@ const CONDS = [
   ["rsi_above", "RSI above"], ["rsi_below", "RSI below"],
 ];
 
-export default function Alerts() {
+function AlertsInner() {
+  const sp = useSearchParams();
   const [syms, setSyms] = useState([]);
   const [rows, setRows] = useState([]);
-  const [f, setF] = useState({ symbol: "RELIANCE", condition: "price_above", threshold: "" });
+  const [f, setF] = useState({ symbol: sp.get("symbol") || "RELIANCE", condition: "price_above", threshold: "" });
   const [busy, setBusy] = useState(false);
   const load = () => api("/api/alerts").then(setRows).catch(() => {});
   useEffect(() => { load(); api("/api/symbols").then(setSyms).catch(() => {}); }, []);
@@ -63,4 +65,7 @@ export default function Alerts() {
       </div>
     </div>
   );
+}
+export default function Alerts() {
+  return <Suspense><AlertsInner /></Suspense>;
 }

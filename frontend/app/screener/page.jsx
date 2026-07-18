@@ -6,15 +6,21 @@ import { api, fmt } from "../../lib/api";
 export default function Screener() {
   const [f, setF] = useState({ max_pe: 60, min_roe: 0, max_de: 5, rsi_lo: 0, rsi_hi: 100, min_rvol: 0, above_ema50: false, market: "" });
   const [rows, setRows] = useState([]);
+  const [watched, setWatched] = useState(new Set());
   const [refreshStatus, setRefreshStatus] = useState(null); // {running, done, total, errors}
   const pollRef = useRef(null);
   const run = useCallback(() => {
     const p = new URLSearchParams(Object.entries(f).filter(([, v]) => v !== "" && v !== false));
     api(`/api/screener?${p}`).then(setRows).catch(() => {});
   }, [f]);
+  const loadWatched = () => api("/api/watchlist").then((r) => setWatched(new Set(r.map((q) => q.symbol)))).catch(() => {});
   useEffect(() => { run(); }, [run]);
+  useEffect(() => { loadWatched(); }, []);
   useEffect(() => () => clearInterval(pollRef.current), []);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+
+  const addToWatchlist = (symbol) =>
+    api(`/api/watchlist/${symbol}`, { method: "POST" }).then(() => setWatched((w) => new Set(w).add(symbol)));
 
   const refreshAll = () => {
     api("/api/fundamentals/refresh-all", { method: "POST" }).then((s) => {
@@ -55,7 +61,7 @@ export default function Screener() {
       )}
       <div className="card overflow-x-auto">
         <table className="w-full"><thead><tr>
-          <th>SYMBOL</th><th>SECTOR</th><th>LAST</th><th>P/E</th><th>ROE%</th><th>D/E</th><th>RSI</th><th>RVOL</th><th>TREND</th><th>SCORE</th>
+          <th>SYMBOL</th><th>SECTOR</th><th>LAST</th><th>P/E</th><th>ROE%</th><th>D/E</th><th>RSI</th><th>RVOL</th><th>TREND</th><th>SCORE</th><th></th>
         </tr></thead><tbody>
           {rows.map((r) => (
             <tr key={r.symbol}>
@@ -68,8 +74,15 @@ export default function Screener() {
               <td className={r.rvol >= 1.5 ? "text-brass" : ""}>{fmt(r.rvol, 2)}</td>
               <td className={r.trend === "UP" ? "text-up" : "text-down"}>{r.trend}</td>
               <td className="text-brass">{fmt(r.score, 1)}</td>
+              <td className="flex gap-1 text-xs">
+                <button className="ghost !px-2 !py-0.5" title={watched.has(r.symbol) ? "Already on watchlist" : "Add to watchlist"}
+                  disabled={watched.has(r.symbol)} onClick={() => addToWatchlist(r.symbol)}>
+                  {watched.has(r.symbol) ? "★" : "☆"}</button>
+                <Link className="ghost !px-2 !py-0.5" title="Set an alert" href={`/alerts?symbol=${r.symbol}`}>🔔</Link>
+                <Link className="ghost !px-2 !py-0.5" title="Backtest this" href={`/backtest?symbol=${r.symbol}`}>📊</Link>
+              </td>
             </tr>))}
-          {rows.length === 0 && <tr><td colSpan={10} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={11} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
         </tbody></table>
       </div>
     </div>

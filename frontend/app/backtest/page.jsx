@@ -1,11 +1,13 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { api, fmt } from "../../lib/api";
 
-export default function Backtest() {
+function BacktestInner() {
+  const sp = useSearchParams();
   const [syms, setSyms] = useState([]);
-  const [form, setForm] = useState({ symbol: "TCS", strategy: "emax", fast: 20, slow: 50, buy: 30, sell: 60, fee_bps: 5, slip_bps: 5 });
+  const [form, setForm] = useState({ symbol: sp.get("symbol") || "TCS", strategy: "emax", fast: 20, slow: 50, buy: 30, sell: 60, fee_bps: 5, slip_bps: 5 });
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { api("/api/symbols").then(setSyms).catch(() => {}); }, []);
@@ -68,4 +70,7 @@ export default function Backtest() {
       {res?.error && <div className="card text-down text-sm">{res.error}</div>}
     </div>
   );
+}
+export default function Backtest() {
+  return <Suspense><BacktestInner /></Suspense>;
 }
