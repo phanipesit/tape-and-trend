@@ -1,18 +1,33 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { api, fmt } from "../../lib/api";
 
 export default function Screener() {
   const [f, setF] = useState({ max_pe: 60, min_roe: 0, max_de: 5, rsi_lo: 0, rsi_hi: 100, min_rvol: 0, above_ema50: false, market: "" });
   const [rows, setRows] = useState([]);
-  const [refreshErrors, setRefreshErrors] = useState([]);
+  const [refreshStatus, setRefreshStatus] = useState(null); // {running, done, total, errors}
+  const pollRef = useRef(null);
   const run = useCallback(() => {
     const p = new URLSearchParams(Object.entries(f).filter(([, v]) => v !== "" && v !== false));
     api(`/api/screener?${p}`).then(setRows).catch(() => {});
   }, [f]);
   useEffect(() => { run(); }, [run]);
+  useEffect(() => () => clearInterval(pollRef.current), []);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+
+  const refreshAll = () => {
+    api("/api/fundamentals/refresh-all", { method: "POST" }).then((s) => {
+      setRefreshStatus({ running: true, done: 0, total: s.total || 0, errors: {} });
+      clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => {
+        api("/api/fundamentals/refresh-status").then((st) => {
+          setRefreshStatus(st);
+          if (!st.running) { clearInterval(pollRef.current); run(); }
+        }).catch(() => clearInterval(pollRef.current));
+      }, 2000);
+    }).catch(() => {});
+  };
 
   return (
     <div className="space-y-4">
@@ -28,15 +43,14 @@ export default function Screener() {
         <label className="flex flex-col gap-1 text-mut">RSI ≤<input type="number" className="w-16" value={f.rsi_hi} onChange={set("rsi_hi")} /></label>
         <label className="flex flex-col gap-1 text-mut">Min RVOL<input type="number" step="0.1" className="w-16" value={f.min_rvol} onChange={set("min_rvol")} /></label>
         <label className="flex items-center gap-2 text-mut pb-1"><input type="checkbox" checked={f.above_ema50} onChange={set("above_ema50")} />Above EMA50</label>
-        <button className="ghost" onClick={() => api("/api/fundamentals/refresh-all", { method: "POST" }).then((done) => {
-          setRefreshErrors(Object.entries(done).filter(([, v]) => v?.error).map(([sym, v]) => `${sym}: ${v.error}`));
-          run();
-        })}>↻ Refresh all fundamentals</button>
+        <button className="ghost" disabled={refreshStatus?.running} onClick={refreshAll}>
+          {refreshStatus?.running ? `↻ Refreshing… ${refreshStatus.done}/${refreshStatus.total}` : "↻ Refresh all fundamentals"}
+        </button>
       </div>
-      {refreshErrors.length > 0 && (
+      {refreshStatus && !refreshStatus.running && Object.keys(refreshStatus.errors || {}).length > 0 && (
         <div className="card text-xs text-down space-y-1">
-          <p className="font-semibold">Fundamentals refresh failed for {refreshErrors.length} symbol(s):</p>
-          {refreshErrors.map((e) => <p key={e}>{e}</p>)}
+          <p className="font-semibold">Fundamentals refresh failed for {Object.keys(refreshStatus.errors).length} symbol(s):</p>
+          {Object.entries(refreshStatus.errors).map(([sym, err]) => <p key={sym}>{sym}: {err}</p>)}
         </div>
       )}
       <div className="card overflow-x-auto">

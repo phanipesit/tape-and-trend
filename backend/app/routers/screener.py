@@ -1,8 +1,13 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from ..services.data import all_symbols, refresh_fundamentals
 from ..services.signals import analyse
 import time
 router = APIRouter(prefix="/api", tags=["screener"])
+
+# Refreshing the whole universe is a multi-minute run (one throttled Yahoo call
+# per symbol) — too long for a single blocking request. It runs in the
+# background; the frontend polls /fundamentals/refresh-status for progress.
+_refresh_state = {"running": False, "done": 0, "total": 0, "errors": {}}
 
 @router.get("/screener")
 def screener(market: str | None = None, max_pe: float = 1e9, min_roe: float = -1e9,
@@ -31,13 +36,25 @@ def refresh(symbol: str):
     except Exception as e:
         raise HTTPException(502, str(e))
 
-@router.post("/fundamentals/refresh-all")
-def refresh_all():
-    done = {}
-    for s in all_symbols():
+def _run_refresh_all():
+    syms = all_symbols()
+    _refresh_state.update(running=True, done=0, total=len(syms), errors={})
+    for s in syms:
         try:
-            done[s["symbol"]] = refresh_fundamentals(s["symbol"])
+            refresh_fundamentals(s["symbol"])
         except Exception as e:
-            done[s["symbol"]] = {"error": str(e)}
+            _refresh_state["errors"][s["symbol"]] = str(e)
+        _refresh_state["done"] += 1
         time.sleep(1.5)
-    return done
+    _refresh_state["running"] = False
+
+@router.post("/fundamentals/refresh-all")
+def refresh_all(background_tasks: BackgroundTasks):
+    if _refresh_state["running"]:
+        return {"already_running": True, **_refresh_state}
+    background_tasks.add_task(_run_refresh_all)
+    return {"started": True, "total": len(all_symbols())}
+
+@router.get("/fundamentals/refresh-status")
+def refresh_status():
+    return _refresh_state
