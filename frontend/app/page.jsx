@@ -84,7 +84,8 @@ export default function Dashboard() {
               </div>
               <p className="font-mono text-[11px] text-dim mt-1">
                 entry {fmt(a.entry)} · stop {fmt(a.stop)} · target {fmt(a.target)} ·{" "}
-                <Link href="/risk" className="text-brass hover:underline">size it →</Link></p>
+                <Link href={`/risk?symbol=${a.symbol}&entry=${a.entry}&stop=${a.stop}&target=${a.target}`}
+                  className="text-brass hover:underline">size it →</Link></p>
             </div>))}
           {sigs.length > 3 && <Link href="/signals" className="ghost inline-block mt-2">All {sigs.length} setups →</Link>}
         </div>

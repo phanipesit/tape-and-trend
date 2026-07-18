@@ -1,11 +1,16 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { api, fmt } from "../../lib/api";
 
-export default function Risk() {
+function RiskInner() {
+  const sp = useSearchParams();
   const [syms, setSyms] = useState([]);
-  const [f, setF] = useState({ account: 500000, riskPct: 1, entry: "", stop: "", target: "" });
-  const [loadSym, setLoadSym] = useState("RELIANCE");
+  const [f, setF] = useState({
+    account: 500000, riskPct: 1,
+    entry: sp.get("entry") || "", stop: sp.get("stop") || "", target: sp.get("target") || "",
+  });
+  const [loadSym, setLoadSym] = useState(sp.get("symbol") || "RELIANCE");
   useEffect(() => { api("/api/symbols").then(setSyms).catch(() => {}); }, []);
 
   const loadPlan = async () => {
@@ -65,4 +70,7 @@ export default function Risk() {
       <p className="text-dim text-xs">Rules of thumb: risk ≤ 1–2% per trade, take setups with R:R ≥ 2, and be cautious when one position exceeds ~25% of the account. Educational tool — not investment advice.</p>
     </div>
   );
+}
+export default function Risk() {
+  return <Suspense><RiskInner /></Suspense>;
 }
