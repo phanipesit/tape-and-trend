@@ -1,14 +1,18 @@
 """News: yfinance per-ticker news (keyless) + optional NewsAPI top business headlines."""
+import logging
 import httpx
 import yfinance as yf
 from .data import yf_symbol, get_symbol
 from ..config import NEWSAPI_KEY
+
+log = logging.getLogger(__name__)
 
 def ticker_news(symbol: str, limit: int = 8) -> list[dict]:
     meta = get_symbol(symbol)
     try:
         items = yf.Ticker(yf_symbol(symbol, meta["market"])).news or []
     except Exception:
+        log.warning("news fetch failed for %s", symbol, exc_info=True)
         items = []
     out = []
     for n in items[:limit]:

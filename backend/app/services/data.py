@@ -1,9 +1,12 @@
 """Candle + fundamentals layer: yfinance -> PostgreSQL cache -> API."""
+import logging
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
 from ..db import q, engine
 from ..config import CANDLE_STALE_HOURS, FX_STALE_MINUTES, USD_INR_FALLBACK
+
+log = logging.getLogger(__name__)
 
 BSE_OVERRIDE = {"HDFCBANK"}   # symbols with bad Yahoo NSE data → use BSE feed
 
@@ -20,7 +23,8 @@ def usd_inr_rate() -> float:
         if rate:
             _fx_cache["rate"], _fx_cache["at"] = float(rate), now
     except Exception:
-        pass  # serve stale/fallback rate if yahoo hiccups
+        log.warning("USD/INR fetch failed, serving %s",
+                    "cached rate" if _fx_cache["rate"] else "hardcoded fallback", exc_info=True)
     return _fx_cache["rate"] or USD_INR_FALLBACK
 
 def yf_symbol(symbol: str, market: str) -> str:
@@ -75,7 +79,7 @@ def get_candles(symbol: str, limit: int = 500, auto: bool = True) -> pd.DataFram
         try:
             refresh_candles(symbol)
         except Exception:
-            pass  # serve stale cache if yahoo hiccups
+            log.warning("candle refresh failed for %s, serving stale cache", symbol, exc_info=True)
     rows = q("SELECT d,o,h,l,c,v FROM ohlcv WHERE symbol=:s ORDER BY d DESC LIMIT :n",
              s=symbol, n=limit)
     df = pd.DataFrame(rows[::-1])

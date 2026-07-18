@@ -1,8 +1,11 @@
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import yfinance as yf
 from ..db import q
 from ..services.data import yf_symbol, refresh_candles
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["symbols"])
 
@@ -24,6 +27,7 @@ def add_symbol(s: NewSymbol):
         df = yf.download(yf_symbol(sym, s.market), period="5d",
                          interval="1d", progress=False, auto_adjust=True)
     except Exception:
+        log.warning("yahoo validation fetch failed for %s (%s)", sym, s.market, exc_info=True)
         df = None
     if df is None or df.empty:
         raise HTTPException(404,
@@ -36,6 +40,7 @@ def add_symbol(s: NewSymbol):
     try:
         rows = refresh_candles(sym)
     except Exception:
+        log.warning("initial candle load failed for %s after insert", sym, exc_info=True)
         rows = 0
     return {"ok": True, "symbol": sym, "candles_loaded": rows}
 

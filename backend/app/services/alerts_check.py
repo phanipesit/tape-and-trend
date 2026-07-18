@@ -1,7 +1,10 @@
 """Evaluate active alerts against latest price / RSI and mark triggers."""
+import logging
 from ..db import q
 from .data import quote
 from .signals import latest_rsi
+
+log = logging.getLogger(__name__)
 
 def check_all() -> list[dict]:
     fired = []
@@ -21,5 +24,7 @@ def check_all() -> list[dict]:
                   v=round(float(val), 2), i=a["id"])
                 fired.append({**a, "triggered_value": round(float(val), 2)})
         except Exception:
+            log.warning("alert check failed for id=%s symbol=%s condition=%s",
+                        a["id"], a["symbol"], a["condition"], exc_info=True)
             continue
     return fired
