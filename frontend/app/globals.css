@@ -1,0 +1,13 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wght@400;500;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { @apply bg-bg text-txt; font-family: 'Archivo', system-ui, sans-serif; }
+.card { @apply bg-panel border border-line rounded-xl p-4; }
+.btn { @apply bg-brass text-black font-bold rounded-lg px-4 py-2 text-sm hover:brightness-110; }
+.ghost { @apply border border-line2 rounded-lg px-3 py-1.5 text-sm text-txt hover:border-brass hover:text-brass; }
+.ghost.on { @apply border-brass text-brass bg-brass/10; }
+input, select { @apply bg-panel2 border border-line2 rounded-lg px-3 py-1.5 font-mono text-sm focus:outline-none focus:border-brass; }
+th { @apply text-dim text-left text-[11px] font-medium py-2 px-2 border-b border-line tracking-wide; }
+td { @apply py-2 px-2 border-b border-line font-mono text-[13px] whitespace-nowrap; }

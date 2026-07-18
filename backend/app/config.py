@@ -1,0 +1,9 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/tapetrend")
+TWELVEDATA_KEY = os.getenv("TWELVEDATA_KEY", "")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+CANDLE_STALE_HOURS = 12   # refetch from yfinance if cache older than this
