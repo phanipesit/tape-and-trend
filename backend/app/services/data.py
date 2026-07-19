@@ -1,5 +1,6 @@
 """Candle + fundamentals layer: yfinance -> PostgreSQL cache -> API."""
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
@@ -10,6 +11,21 @@ log = logging.getLogger(__name__)
 
 BSE_OVERRIDE = {"HDFCBANK"}   # symbols with bad Yahoo NSE data → use BSE feed
 
+# yfinance shares one session/cache across threads and is NOT thread-safe:
+# concurrent downloads from parallel request handlers (e.g. /watchlist and
+# /signals fired together by the dashboard) can cross-wire responses, writing
+# symbol A's candles under symbol B. All yfinance network access must hold
+# this lock.
+YF_LOCK = threading.Lock()
+
+def yf_download(ysym: str, **kwargs) -> pd.DataFrame:
+    with YF_LOCK:
+        return yf.download(ysym, progress=False, **kwargs)
+
+def yf_info(ysym: str) -> dict:
+    with YF_LOCK:
+        return yf.Ticker(ysym).info or {}
+
 _fx_cache = {"rate": None, "at": None}
 
 def usd_inr_rate() -> float:
@@ -18,7 +34,7 @@ def usd_inr_rate() -> float:
     if _fx_cache["rate"] and now - _fx_cache["at"] < timedelta(minutes=FX_STALE_MINUTES):
         return _fx_cache["rate"]
     try:
-        info = yf.Ticker("INR=X").info or {}
+        info = yf_info("INR=X")
         rate = info.get("regularMarketPrice") or info.get("previousClose")
         if rate:
             _fx_cache["rate"], _fx_cache["at"] = float(rate), now
@@ -57,8 +73,17 @@ def _recent_fetch(symbol: str) -> bool:
 
 def refresh_candles(symbol: str, period: str = "2y") -> int:
     meta = get_symbol(symbol)
-    df = yf.download(yf_symbol(symbol, meta["market"]), period=period,
-                     interval="1d", auto_adjust=True, progress=False)
+    ysym = yf_symbol(symbol, meta["market"])
+    df = yf_download(ysym, period=period, interval="1d", auto_adjust=True)
+    if meta["market"] == "IN" and len(df) < 50:
+        # one exchange's Yahoo feed sometimes goes bad (returns a bar or two);
+        # fall back to the other listing before giving up
+        alt = f"{symbol}.NS" if ysym.endswith(".BO") else f"{symbol}.BO"
+        alt_df = yf_download(alt, period=period, interval="1d", auto_adjust=True)
+        if len(alt_df) > len(df):
+            log.warning("%s: %s returned %d bars, using %s (%d bars) instead",
+                        symbol, ysym, len(df), alt, len(alt_df))
+            df = alt_df
     if df.empty:
         return 0
     if isinstance(df.columns, pd.MultiIndex):
@@ -97,7 +122,7 @@ def refresh_fundamentals(symbol: str) -> dict:
     info, last_err = {}, None
     for ysym in candidates:
         try:
-            info = yf.Ticker(ysym).info or {}
+            info = yf_info(ysym)
         except Exception as e:
             last_err = e
             info = {}

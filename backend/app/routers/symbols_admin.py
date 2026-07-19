@@ -1,9 +1,8 @@
 import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import yfinance as yf
 from ..db import q
-from ..services.data import yf_symbol, refresh_candles
+from ..services.data import yf_symbol, yf_download, refresh_candles
 
 log = logging.getLogger(__name__)
 
@@ -24,8 +23,8 @@ def add_symbol(s: NewSymbol):
         raise HTTPException(409, f"{sym} already exists")
     # validate against yahoo before inserting
     try:
-        df = yf.download(yf_symbol(sym, s.market), period="5d",
-                         interval="1d", progress=False, auto_adjust=True)
+        df = yf_download(yf_symbol(sym, s.market), period="5d",
+                         interval="1d", auto_adjust=True)
     except Exception:
         log.warning("yahoo validation fetch failed for %s (%s)", sym, s.market, exc_info=True)
         df = None

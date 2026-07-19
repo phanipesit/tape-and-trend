@@ -2,7 +2,7 @@
 import logging
 import httpx
 import yfinance as yf
-from .data import yf_symbol, get_symbol
+from .data import yf_symbol, get_symbol, YF_LOCK
 from ..config import NEWSAPI_KEY
 
 log = logging.getLogger(__name__)
@@ -10,7 +10,8 @@ log = logging.getLogger(__name__)
 def ticker_news(symbol: str, limit: int = 8) -> list[dict]:
     meta = get_symbol(symbol)
     try:
-        items = yf.Ticker(yf_symbol(symbol, meta["market"])).news or []
+        with YF_LOCK:
+            items = yf.Ticker(yf_symbol(symbol, meta["market"])).news or []
     except Exception:
         log.warning("news fetch failed for %s", symbol, exc_info=True)
         items = []
