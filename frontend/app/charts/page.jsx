@@ -4,19 +4,38 @@ import { useSearchParams } from "next/navigation";
 import TVChart from "../../components/TVChart";
 import { api, fmt } from "../../lib/api";
 
+const boldify = (s) => s.split("**").map((part, i) => (i % 2 ? <b key={i} className="text-txt">{part}</b> : part));
+const Md = ({ text }) => text.split("\n").map((ln, i) => {
+  if (ln.startsWith("## ")) return <h4 key={i} className="font-semibold text-brass mt-3 mb-1">{ln.slice(3)}</h4>;
+  if (ln.startsWith("- ")) return <p key={i} className="text-mut pl-3 py-0.5">• {boldify(ln.slice(2))}</p>;
+  if (ln.startsWith("*") && ln.endsWith("*") && !ln.startsWith("**")) return <p key={i} className="text-dim text-xs mt-2">{ln.replaceAll("*", "")}</p>;
+  if (!ln.trim()) return null;
+  return <p key={i} className="text-mut py-0.5">{boldify(ln)}</p>;
+});
+
 function ChartsInner() {
   const sp = useSearchParams();
   const [symbol, setSymbol] = useState(sp.get("symbol") || "RELIANCE");
   const [syms, setSyms] = useState([]);
   const [a, setA] = useState(null);
   const [f, setF] = useState(null);
+  const [ai, setAi] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
 
   useEffect(() => { api("/api/symbols").then(setSyms).catch(() => {}); }, []);
   useEffect(() => {
-    setA(null); setF(null);
+    setA(null); setF(null); setAi(null);
     api(`/api/signals/${symbol}`).then(setA).catch(() => {});
     api("/api/symbols").then((all) => setF(all.find((x) => x.symbol === symbol))).catch(() => {});
   }, [symbol]);
+
+  const runAi = () => {
+    setAiBusy(true); setAi(null);
+    api(`/api/ai/analyze/${symbol}`)
+      .then(setAi)
+      .catch((e) => setAi({ error: String(e.message || e) }))
+      .finally(() => setAiBusy(false));
+  };
 
   const market = syms.find((x) => x.symbol === symbol)?.market || "IN";
 
@@ -58,6 +77,22 @@ function ChartsInner() {
               <b className={s.type === "BUY" ? "text-up" : s.type === "SELL" ? "text-down" : "text-brass"}>{s.type}</b> — {s.why}</p>))
             : <p className="text-dim">None on the latest bar.</p>}
         </div>
+      </div>
+      <div className="card text-sm">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-semibold">✨ AI stock analysis</h3>
+          <button className="btn !py-1.5" onClick={runAi} disabled={aiBusy}>
+            {aiBusy ? "Analysing…" : ai ? "↻ Re-analyse" : `Analyse ${symbol}`}</button>
+        </div>
+        {!ai && !aiBusy && <p className="text-dim">One-click read of the chart, signals, fundamentals and news for {symbol}.</p>}
+        {aiBusy && <p className="text-dim">Reading candles, indicators, fundamentals and headlines…</p>}
+        {ai?.error && <p className="text-down">Analysis failed — is the backend running? {ai.error}</p>}
+        {ai?.analysis && (<>
+          <p className="text-[10px] text-dim uppercase tracking-wide mb-1">
+            {ai.source === "claude" ? `Powered by Claude (${ai.model})` : "Rule-based analysis — add ANTHROPIC_API_KEY in backend/.env for Claude"}
+            {ai.note ? ` · ${ai.note}` : ""}</p>
+          <Md text={ai.analysis} />
+        </>)}
       </div>
     </div>
   );
