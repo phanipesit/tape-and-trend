@@ -12,11 +12,32 @@ const QUADRANTS = {
 const Ret = ({ v }) => v == null ? <td>—</td> :
   <td className={v >= 0 ? "text-up" : "text-down"}>{v >= 0 ? "+" : ""}{fmt(v, 1)}%</td>;
 
+// Leading first when sorting by quadrant descending
+const QUADRANT_RANK = { Leading: 3, Improving: 2, Weakening: 1, Lagging: 0 };
+
+const COLS = [
+  ["sector", "SECTOR"], ["n", "STOCKS"], ["r_1m", "1M"], ["r_3m", "3M"],
+  ["r_6m", "6M"], ["r_1y", "1Y"], ["breadth", "BREADTH"],
+  ["vol_ratio", "VOL TREND"], ["quadrant", "QUADRANT"],
+];
+
 export default function Sectors() {
   const [market, setMarket] = useState("IN");
   const [data, setData] = useState(null);
+  const [sort, setSort] = useState({ key: "r_1m", desc: true });
   useEffect(() => { setData(null); api(`/api/sectors?market=${market}`).then(setData).catch(() => {}); }, [market]);
-  const rows = data?.sectors || [];
+
+  const sortBy = (key) => setSort((s) =>
+    ({ key, desc: s.key === key ? !s.desc : key !== "sector" }));
+
+  const sortVal = (r) => sort.key === "quadrant" ? QUADRANT_RANK[r.quadrant] : r[sort.key];
+  const rows = [...(data?.sectors || [])].sort((a, b) => {
+    const va = sortVal(a), vb = sortVal(b);
+    if (va == null) return 1;              // nulls always last
+    if (vb == null) return -1;
+    const cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+    return sort.desc ? -cmp : cmp;
+  });
 
   return (
     <div className="space-y-4">
@@ -45,7 +66,10 @@ export default function Sectors() {
       </div>
       <div className="card overflow-x-auto">
         <table className="w-full"><thead><tr>
-          <th>SECTOR</th><th>STOCKS</th><th>1M</th><th>3M</th><th>6M</th><th>1Y</th><th>BREADTH</th><th>VOL TREND</th><th>QUADRANT</th>
+          {COLS.map(([key, label]) => (
+            <th key={key} className="cursor-pointer select-none hover:text-brass" onClick={() => sortBy(key)}>
+              {label}{sort.key === key ? (sort.desc ? " ▼" : " ▲") : ""}
+            </th>))}
         </tr></thead><tbody>
           {rows.map((s) => (
             <tr key={s.sector}>
@@ -62,7 +86,7 @@ export default function Sectors() {
       </div>
       <p className="text-dim text-xs">
         Breadth = % of the sector's stocks above their 200-day average. Vol trend = last month's average
-        daily volume vs the prior 3 months'. Sorted by 1-month return. Educational tool — not investment advice.
+        daily volume vs the prior 3 months'. Click a column header to sort. Educational tool — not investment advice.
       </p>
     </div>
   );
