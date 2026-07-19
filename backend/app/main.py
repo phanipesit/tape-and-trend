@@ -6,6 +6,7 @@ from .config import CORS_ORIGINS
 from .routers import (quotes, candles, screener, signals, backtest,
                       portfolio, news, alerts, symbols_admin, sectors, ai)
 from .services.alerts_check import check_all
+from .db import q
 
 log = logging.getLogger(__name__)
 
@@ -16,6 +17,15 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS,
 for r in (quotes, candles, screener, signals, backtest,
           portfolio, news, alerts, symbols_admin, sectors, ai):
     app.include_router(r.router)
+
+@app.on_event("startup")
+async def table_check():
+    # a missing table otherwise fails silently inside feature code (see db/migration_004 header)
+    for t in ("symbols", "ohlcv", "watchlist", "portfolio_tx", "backtest_runs", "alerts"):
+        try:
+            q(f"SELECT 1 FROM {t} LIMIT 1")
+        except Exception:
+            log.error("table %s is missing — run db/schema.sql and the db/migration_*.sql files", t)
 
 @app.on_event("startup")
 async def alert_loop():

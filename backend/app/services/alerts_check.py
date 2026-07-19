@@ -20,9 +20,12 @@ def check_all() -> list[dict]:
                 continue
             hit = (cond.endswith("above") and val > th) or (cond.endswith("below") and val < th)
             if hit:
+                v = round(float(val), 2)
                 q("""UPDATE alerts SET triggered_at=now(), triggered_value=:v WHERE id=:i""",
-                  v=round(float(val), 2), i=a["id"])
-                fired.append({**a, "triggered_value": round(float(val), 2)})
+                  v=v, i=a["id"])
+                fired.append({**a, "triggered_value": v})
+                log.info("alert fired: %s %s %s (value %s)",
+                         a["symbol"], a["condition"], a["threshold"], v)
         except Exception:
             log.warning("alert check failed for id=%s symbol=%s condition=%s",
                         a["id"], a["symbol"], a["condition"], exc_info=True)

@@ -39,6 +39,8 @@ def usd_inr_rate() -> float:
         if rate:
             _fx_cache["rate"], _fx_cache["at"] = float(rate), now
     except Exception:
+        if _fx_cache["rate"]:
+            _fx_cache["at"] = now   # hold the cached rate for a full window before re-hitting a failing feed
         log.warning("USD/INR fetch failed, serving %s",
                     "cached rate" if _fx_cache["rate"] else "hardcoded fallback", exc_info=True)
     return _fx_cache["rate"] or USD_INR_FALLBACK
@@ -59,6 +61,8 @@ def all_symbols(market: str | None = None) -> list[dict]:
         return q("SELECT * FROM symbols WHERE market=:m ORDER BY symbol", m=market)
     return q("SELECT * FROM symbols ORDER BY market, symbol")
 
+_last_fetch: dict[str, datetime] = {}
+
 def _cache_fresh(symbol: str) -> bool:
     rows = q("SELECT max(d) AS last FROM ohlcv WHERE symbol=:s", s=symbol)
     last = rows[0]["last"]
@@ -68,8 +72,10 @@ def _cache_fresh(symbol: str) -> bool:
            _recent_fetch(symbol)
 
 def _recent_fetch(symbol: str) -> bool:
-    # crude staleness guard: if we've written today's/yesterday's bar, don't refetch within CANDLE_STALE_HOURS
-    return False
+    # Over weekends/holidays the newest bar stays >1 day old no matter how often we
+    # refetch, so the max(d) check alone would re-hit yfinance on every read.
+    at = _last_fetch.get(symbol)
+    return at is not None and datetime.now(timezone.utc) - at < timedelta(hours=CANDLE_STALE_HOURS)
 
 def refresh_candles(symbol: str, period: str = "2y") -> int:
     meta = get_symbol(symbol)
@@ -84,20 +90,23 @@ def refresh_candles(symbol: str, period: str = "2y") -> int:
             log.warning("%s: %s returned %d bars, using %s (%d bars) instead",
                         symbol, ysym, len(df), alt, len(alt_df))
             df = alt_df
+    _last_fetch[symbol] = datetime.now(timezone.utc)
     if df.empty:
         return 0
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.rename(columns={"Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"})
     df = df[["o", "h", "l", "c", "v"]].dropna()
+    rows = [(symbol, d.date(), float(r.o), float(r.h), float(r.l), float(r.c), int(r.v or 0))
+            for d, r in df.iterrows()]
     with engine.begin() as cx:
-        for d, r in df.iterrows():
-            cx.exec_driver_sql(
-                """INSERT INTO ohlcv (symbol,d,o,h,l,c,v) VALUES (%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (symbol,d) DO UPDATE SET o=EXCLUDED.o,h=EXCLUDED.h,
-                   l=EXCLUDED.l,c=EXCLUDED.c,v=EXCLUDED.v""",
-                (symbol, d.date(), float(r.o), float(r.h), float(r.l), float(r.c), int(r.v or 0)))
-    return len(df)
+        cx.exec_driver_sql(
+            "INSERT INTO ohlcv (symbol,d,o,h,l,c,v) VALUES "
+            + ",".join(["(%s,%s,%s,%s,%s,%s,%s)"] * len(rows))
+            + """ ON CONFLICT (symbol,d) DO UPDATE SET o=EXCLUDED.o,h=EXCLUDED.h,
+                  l=EXCLUDED.l,c=EXCLUDED.c,v=EXCLUDED.v""",
+            tuple(p for row in rows for p in row))
+    return len(rows)
 
 def get_candles(symbol: str, limit: int = 500, auto: bool = True) -> pd.DataFrame:
     if auto and not _cache_fresh(symbol):
