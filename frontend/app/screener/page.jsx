@@ -6,12 +6,20 @@ import { api, fmt } from "../../lib/api";
 export default function Screener() {
   const [f, setF] = useState({ max_pe: 60, min_roe: 0, max_de: 5, rsi_lo: 0, rsi_hi: 100, min_rvol: 0, above_ema50: false, market: "" });
   const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
   const [watched, setWatched] = useState(new Set());
   const [refreshStatus, setRefreshStatus] = useState(null); // {running, done, total, errors}
   const pollRef = useRef(null);
+  const seqRef = useRef(0);
   const run = useCallback(() => {
     const p = new URLSearchParams(Object.entries(f).filter(([, v]) => v !== "" && v !== false));
-    api(`/api/screener?${p}`).then(setRows).catch(() => {});
+    const seq = ++seqRef.current;      // ignore out-of-order responses from older requests
+    setLoading(true); setErr("");
+    api(`/api/screener?${p}`)
+      .then((r) => { if (seq === seqRef.current) setRows(r); })
+      .catch((e) => { if (seq === seqRef.current) setErr(String(e.message || e)); })
+      .finally(() => { if (seq === seqRef.current) setLoading(false); });
   }, [f]);
   const loadWatched = () => api("/api/watchlist").then((r) => setWatched(new Set(r.map((q) => q.symbol)))).catch(() => {});
   useEffect(() => { run(); }, [run]);
@@ -82,7 +90,9 @@ export default function Screener() {
                 <Link className="ghost !px-2 !py-0.5" title="Backtest this" href={`/backtest?symbol=${r.symbol}`}>📊</Link>
               </td>
             </tr>))}
-          {rows.length === 0 && <tr><td colSpan={11} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
+          {loading && rows.length === 0 && <tr><td colSpan={11} className="text-dim">Scanning the universe… (first run can take a while while candles warm up)</td></tr>}
+          {err && !loading && <tr><td colSpan={11} className="text-down">Screener request failed — is the backend running on :8000? {err} <button className="ghost !px-2 !py-0.5 ml-2" onClick={run}>Retry</button></td></tr>}
+          {!loading && !err && rows.length === 0 && <tr><td colSpan={11} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
         </tbody></table>
       </div>
     </div>
