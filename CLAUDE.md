@@ -88,8 +88,9 @@ edge, so the risk calculator can always load a plan) — this is the shared buil
 the signals page, Today's Focus, the screener's ranking, and alerts.
 
 **Backtester** (`services/backtest.py`) is vectorized numpy over `enrich()`'d candles, long-only,
-three built-in strategies (`emax`, `rsi`, `macd`) selected by string, with per-side fee/slippage
-in bps. Every run is persisted to `backtest_runs` as a side effect of `run()` — there's no
+four built-in strategies (`emax`, `rsi`, `macd`, `signal`) selected by string, with per-side
+fee/slippage in bps. `signal` replays the live swing engine's BUY/SELL rules — its thresholds
+are duplicated from `services/signals.py` and must be kept in sync when the rule set changes. Every run is persisted to `backtest_runs` as a side effect of `run()` — there's no
 separate "save" step. The `/runs` frontend page reads that table back.
 
 **Alerts**: `services/alerts_check.check_all()` polls all rows in `alerts` against live

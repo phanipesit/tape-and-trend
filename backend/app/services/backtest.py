@@ -26,6 +26,18 @@ def run(symbol: str, strategy: str, params: dict) -> dict:
         h = df["macd_h"].to_numpy()
         entry_sig = (h > 0) & (np.roll(h, 1) <= 0)
         exit_sig = (h < 0) & (np.roll(h, 1) >= 0)
+    elif strategy == "signal":
+        # the live swing engine's rules (services/signals.py), long side only:
+        # BUY rules open a position, SELL rules close it — thresholds must stay
+        # in sync with analyse() for this to validate the signals people act on
+        e20, e50 = df["ema20"].to_numpy(), df["ema50"].to_numpy()
+        r, s200 = df["rsi14"].to_numpy(), df["sma200"].to_numpy()
+        h, hi, lo = df["macd_h"].to_numpy(), df["hi20"].to_numpy(), df["lo20"].to_numpy()
+        v, v20 = df["v"].to_numpy(), df["vol20"].to_numpy()
+        cross_up = (e20 > e50) & np.roll(e20 <= e50, 1)
+        cross_dn = (e20 < e50) & np.roll(e20 >= e50, 1)
+        entry_sig = cross_up | ((r < 32) & (c > s200)) | ((c > hi) & (v > 1.4 * v20))
+        exit_sig = cross_dn | ((r > 72) & (h < np.roll(h, 1))) | (c < lo)
     else:
         return {"error": f"unknown strategy {strategy}"}
 

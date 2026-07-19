@@ -7,7 +7,7 @@ router = APIRouter(prefix="/api", tags=["backtest"])
 
 class BTReq(BaseModel):
     symbol: str
-    strategy: str = "emax"          # emax | rsi | macd
+    strategy: str = "emax"          # emax | rsi | macd | signal
     params: dict = {}
 
 @router.post("/backtest")

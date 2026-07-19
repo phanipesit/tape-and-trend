@@ -72,7 +72,7 @@ PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs · al
 | `GET /api/signals` · `GET /api/signals/{sym}` | triggered swing setups + ATR trade plan |
 | `GET /api/screener?max_pe=30&min_roe=15&above_ema50=true&min_rvol=1.5` | blended screen, ranked by score |
 | `GET /api/sectors?market=IN` | sector rotation snapshot |
-| `POST /api/backtest` `{symbol,strategy,params}` | emax / rsi / macd with fee_bps, slip_bps |
+| `POST /api/backtest` `{symbol,strategy,params}` | emax / rsi / macd / signal (live engine) with fee_bps, slip_bps |
 | `GET /api/portfolio` · `POST /api/portfolio/tx` | positions, avg cost, P&L, journal |
 | `GET/POST /api/alerts` · `POST /api/alerts/check` | price/RSI alerts, manual check-now |
 | `GET /api/news` | yfinance ticker news + NewsAPI headlines (optional key) |

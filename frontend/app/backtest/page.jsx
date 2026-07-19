@@ -29,7 +29,8 @@ function BacktestInner() {
       <div className="card flex flex-wrap gap-3 items-end text-xs">
         <select value={form.symbol} onChange={set("symbol")}>{syms.map((s) => <option key={s.symbol}>{s.symbol}</option>)}</select>
         <select value={form.strategy} onChange={set("strategy")}>
-          <option value="emax">EMA crossover</option><option value="rsi">RSI mean reversion</option><option value="macd">MACD flip</option></select>
+          <option value="emax">EMA crossover</option><option value="rsi">RSI mean reversion</option><option value="macd">MACD flip</option>
+          <option value="signal">Live signal engine</option></select>
         {form.strategy === "emax" && <>
           <label className="flex flex-col gap-1 text-mut">Fast<input className="w-16" type="number" value={form.fast} onChange={set("fast")} /></label>
           <label className="flex flex-col gap-1 text-mut">Slow<input className="w-16" type="number" value={form.slow} onChange={set("slow")} /></label></>}
