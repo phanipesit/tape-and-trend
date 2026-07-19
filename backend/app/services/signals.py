@@ -9,22 +9,23 @@ def analyse(symbol: str) -> dict:
     e = enrich(df)
     i, p = e.iloc[-1], e.iloc[-2]
     sig = []
+    # tag = stable rule id, used by signal_eval / signal_outcomes to track per-rule performance
     if p.ema20 <= p.ema50 and i.ema20 > i.ema50:
-        sig.append({"type": "BUY", "why": "EMA20 crossed above EMA50 (trend turn)"})
+        sig.append({"type": "BUY", "tag": "ema_cross_up", "why": "EMA20 crossed above EMA50 (trend turn)"})
     if p.ema20 >= p.ema50 and i.ema20 < i.ema50:
-        sig.append({"type": "SELL", "why": "EMA20 crossed below EMA50"})
+        sig.append({"type": "SELL", "tag": "ema_cross_down", "why": "EMA20 crossed below EMA50"})
     if i.rsi14 < 32 and i.c > i.sma200:
-        sig.append({"type": "BUY", "why": f"RSI {i.rsi14:.0f} oversold in uptrend (pullback)"})
+        sig.append({"type": "BUY", "tag": "rsi_pullback", "why": f"RSI {i.rsi14:.0f} oversold in uptrend (pullback)"})
     if i.rsi14 > 72 and i.macd_h < p.macd_h:
-        sig.append({"type": "SELL", "why": f"RSI {i.rsi14:.0f} overbought, MACD fading"})
+        sig.append({"type": "SELL", "tag": "rsi_overbought", "why": f"RSI {i.rsi14:.0f} overbought, MACD fading"})
     if i.c > i.hi20 and i.v > 1.4 * i.vol20:
-        sig.append({"type": "BUY", "why": "20-day breakout on high volume"})
+        sig.append({"type": "BUY", "tag": "breakout_20d", "why": "20-day breakout on high volume"})
     if i.c < i.lo20:
-        sig.append({"type": "SELL", "why": "20-day range breakdown"})
+        sig.append({"type": "SELL", "tag": "breakdown_20d", "why": "20-day range breakdown"})
     if p.macd_h < 0 and i.macd_h > 0:
-        sig.append({"type": "WATCH", "why": "MACD histogram flipped positive"})
+        sig.append({"type": "WATCH", "tag": "macd_flip_up", "why": "MACD histogram flipped positive"})
     if i.c < i.bb_lo:
-        sig.append({"type": "WATCH", "why": "Close below lower Bollinger band (stretched)"})
+        sig.append({"type": "WATCH", "tag": "bb_stretch", "why": "Close below lower Bollinger band (stretched)"})
     a = float(i.atr14)
     rvol = float(i.v / i.vol20) if i.vol20 else 1.0
     buy_pts = sum(2 for s in sig if s["type"] == "BUY")
@@ -38,7 +39,7 @@ def analyse(symbol: str) -> dict:
     stop = i.c + 1.5 * a if direction == "SHORT" else i.c - 1.5 * a
     target = i.c - 3 * a if direction == "SHORT" else i.c + 3 * a
     return {
-        "symbol": symbol, "close": float(i.c),
+        "symbol": symbol, "close": float(i.c), "date": str(i.d),
         "rsi": round(float(i.rsi14), 1), "trend": "UP" if i.c > i.sma200 else "DOWN",
         "ema20": float(i.ema20), "ema50": float(i.ema50),
         "rvol": round(rvol, 2), "score": round(score, 2),

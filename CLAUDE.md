@@ -122,6 +122,8 @@ corresponding page under `frontend/app/<route>/` plus a `Nav.jsx` entry.
 (its own header comment calls it `migration_003_ai_stocks.sql`), while `UPDATE-INSTRUCTIONS.md`
 describes a *different* migration (journal/risk/alerts schema changes) as "migration_002".
 `db/` currently contains `migration_002.sql` (AI universe), `migration_003_nifty_universe.sql`,
-and `migration_004_alerts_table.sql` — so the next free number is `migration_005`. If you're
+`migration_004_alerts_table.sql`, `migration_005_paper_trades.sql` (also adds the setup/notes
+journal columns the phantom "migration_002" was supposed to create), and
+`migration_006_signal_outcomes.sql` — so the next free number is `migration_007`. If you're
 adding a new migration file, check what's actually in `db/` rather than trusting either
 document's numbering.
