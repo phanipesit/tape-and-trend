@@ -10,14 +10,16 @@ const SETUPS = ["", "EMA cross", "Breakout", "RSI pullback", "MACD flip", "News/
 export default function Portfolio() {
   const [data, setData] = useState({ positions: [], transactions: [], journal: [], stats: { n: 0 }, total_inr: 0, usd_inr: null });
   const [syms, setSyms] = useState([]);
+  const [paper, setPaper] = useState(false);
   const [form, setForm] = useState({ symbol: "RELIANCE", side: "BUY", qty: 10, price: "", setup: "", notes: "" });
-  const load = () => api("/api/portfolio").then(setData).catch(() => {});
-  useEffect(() => { load(); api("/api/symbols").then(setSyms).catch(() => {}); }, []);
+  const load = (p = paper) => api(`/api/portfolio?paper=${p}`).then(setData).catch(() => {});
+  useEffect(() => { load(paper); }, [paper]);
+  useEffect(() => { api("/api/symbols").then(setSyms).catch(() => {}); }, []);
 
   const add = async () => {
     try {
       await api("/api/portfolio/tx", { method: "POST",
-        body: { ...form, qty: +form.qty, price: form.price ? +form.price : null } });
+        body: { ...form, qty: +form.qty, price: form.price ? +form.price : null, is_paper: paper } });
       setForm({ ...form, notes: "" }); load();
     } catch (e) { alert(e); }
   };
@@ -30,7 +32,16 @@ export default function Portfolio() {
         <h1 className="text-xl font-bold">Portfolio & journal</h1>
         <span className="font-mono text-lg text-brass">₹{fmt(totalInr, 0)}</span>
         {data.usd_inr && <span className="text-dim text-[11px]">total, USD converted @ ₹{fmt(data.usd_inr, 2)}/$</span>}
+        <button className={`ghost !py-1 text-xs ${paper ? "!border-brass text-brass" : ""}`}
+          title="Practice trades are stored separately — positions, journal and stats switch with this toggle"
+          onClick={() => setPaper(!paper)}>
+          {paper ? "📝 Practice mode — paper trades" : "Real trades"}</button>
       </div>
+      {paper && <p className="text-brass text-xs -mt-2">Practice mode: everything below is paper — no real money. Toggle back for your real book.</p>}
+      {(data.warnings || []).length > 0 && (
+        <div className="card border-brass text-sm space-y-1">
+          {data.warnings.map((w, i) => <p key={i} className="text-brass">⚠️ {w}</p>)}
+        </div>)}
       <div className="card space-y-2 text-xs">
         <div className="flex flex-wrap gap-3 items-end">
           <select value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })}>
@@ -55,6 +66,24 @@ export default function Portfolio() {
             ["Best / worst", `+${st.best_pct}% / ${st.worst_pct}%`, ""]].map(([k, v, cls]) => (
             <div key={k} className="card"><p className="text-[10px] text-dim uppercase tracking-wide">{k}</p>
               <p className={`font-mono text-base font-semibold ${cls}`}>{v}</p></div>))}
+        </div>)}
+
+      {(data.setup_stats || []).length > 0 && (
+        <div className="card overflow-x-auto">
+          <h2 className="font-semibold text-sm mb-2">Which setups work for you <span className="text-dim text-xs font-normal">closed trades, by setup tag</span></h2>
+          <table className="w-full"><thead><tr>
+            <th>SETUP</th><th>TRADES</th><th>WIN RATE</th><th>AVG RETURN</th><th>TOTAL P&L</th>
+          </tr></thead><tbody>
+            {data.setup_stats.map((s) => (
+              <tr key={s.setup}>
+                <td className="text-brass">{s.setup}</td>
+                <td>{s.n}</td>
+                <td className={s.win_rate >= 50 ? "text-up" : "text-down"}>{fmt(s.win_rate, 0)}%</td>
+                <td className={s.avg_ret_pct >= 0 ? "text-up" : "text-down"}>{s.avg_ret_pct >= 0 ? "+" : ""}{fmt(s.avg_ret_pct, 1)}%</td>
+                <td className={s.total_pnl >= 0 ? "text-up" : "text-down"}>{s.total_pnl >= 0 ? "+" : ""}{fmt(s.total_pnl, 0)}</td>
+              </tr>))}
+          </tbody></table>
+          <p className="text-dim text-[11px] mt-2">Tag every trade with its setup — after ~10 trades per tag this table shows where your edge actually is.</p>
         </div>)}
 
       <div className="grid md:grid-cols-3 gap-4">
