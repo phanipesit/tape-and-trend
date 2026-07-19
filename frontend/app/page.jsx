@@ -83,6 +83,7 @@ export default function Dashboard() {
                   {a.signals[0].type}</span>
               </div>
               <p className="font-mono text-[11px] text-dim mt-1">
+                {a.direction === "SHORT" && <b className="text-down">SHORT · </b>}
                 entry {fmt(a.entry)} · stop {fmt(a.stop)} · target {fmt(a.target)} ·{" "}
                 <Link href={`/risk?symbol=${a.symbol}&entry=${a.entry}&stop=${a.stop}&target=${a.target}`}
                   className="text-brass hover:underline">size it →</Link></p>

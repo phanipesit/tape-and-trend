@@ -28,6 +28,7 @@ export default function Signals() {
               <p key={i} className="text-xs text-mut py-1.5 border-b border-line">
                 <b className={s.type === "BUY" ? "text-up" : s.type === "SELL" ? "text-down" : "text-brass"}>{s.type}</b> — {s.why}</p>))}
             <p className="font-mono text-xs mt-2 text-mut">
+              {a.direction === "SHORT" && <b className="text-down">SHORT · </b>}
               entry {fmt(a.entry)} · <span className="text-down">stop {fmt(a.stop)}</span> · <span className="text-up">target {fmt(a.target)}</span></p>
           </div>))}
       </div>

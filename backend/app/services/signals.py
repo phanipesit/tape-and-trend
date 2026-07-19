@@ -27,15 +27,23 @@ def analyse(symbol: str) -> dict:
         sig.append({"type": "WATCH", "why": "Close below lower Bollinger band (stretched)"})
     a = float(i.atr14)
     rvol = float(i.v / i.vol20) if i.vol20 else 1.0
-    # conviction score: strong signals weigh 2, watch weighs 1, unusual volume adds up to 3
-    score = sum(2 if s["type"] in ("BUY", "SELL") else 1 for s in sig) + min(rvol, 3.0)
+    buy_pts = sum(2 for s in sig if s["type"] == "BUY")
+    sell_pts = sum(2 for s in sig if s["type"] == "SELL")
+    watch_pts = sum(1 for s in sig if s["type"] == "WATCH")
+    # conviction score: dominant direction net of conflicting signals, watch weighs 1,
+    # unusual volume adds up to 3 — but only when at least one rule actually fired
+    score = abs(buy_pts - sell_pts) + watch_pts + (min(rvol, 3.0) if sig else 0.0)
+    # trade plan follows the dominant direction; defaults to long when there is no edge
+    direction = "SHORT" if sell_pts > buy_pts else "LONG"
+    stop = i.c + 1.5 * a if direction == "SHORT" else i.c - 1.5 * a
+    target = i.c - 3 * a if direction == "SHORT" else i.c + 3 * a
     return {
         "symbol": symbol, "close": float(i.c),
         "rsi": round(float(i.rsi14), 1), "trend": "UP" if i.c > i.sma200 else "DOWN",
         "ema20": float(i.ema20), "ema50": float(i.ema50),
         "rvol": round(rvol, 2), "score": round(score, 2),
-        "atr": a, "entry": float(i.c),
-        "stop": float(i.c - 1.5 * a), "target": float(i.c + 3 * a),
+        "atr": a, "direction": direction, "entry": float(i.c),
+        "stop": float(stop), "target": float(target),
         "signals": sig,
     }
 

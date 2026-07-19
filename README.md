@@ -4,8 +4,11 @@ Full-stack trading workbench: **Next.js + Tailwind + TradingView + Recharts** fr
 **FastAPI + pandas + yfinance** backend, **PostgreSQL** cache and system of record.
 
 Covers: live-ish quotes & watchlist · TradingView charts (NSE + US) · swing-signal
-engine · fundamental + technical screener · backtester with costs/slippage (runs
-saved to psql) · portfolio manager · news feed.
+engine with ATR trade plans (long & short) · fundamental + technical screener with
+RVOL · sector rotation view · options payoff lab · backtester with costs/slippage
+(runs saved to psql) · portfolio manager + trade journal (win rate, expectancy) ·
+price/RSI alerts (auto-checked every 5 min) · position-size/risk calculator ·
+"Today's focus" dashboard card · news feed.
 
 > Educational tool — not investment advice. Signals are mechanical rules;
 > backtests are approximations. Verify everything before trading.
@@ -16,7 +19,10 @@ saved to psql) · portfolio manager · news feed.
 ## 1 · Database
 ```bash
 createdb tapetrend
-psql -d tapetrend -f db/schema.sql        # tables + 20 seeded IN/US symbols
+psql -d tapetrend -f db/schema.sql                        # base tables + seeded IN/US symbols
+psql -d tapetrend -f db/migration_002.sql                 # AI-stocks universe expansion
+psql -d tapetrend -f db/migration_003_nifty_universe.sql  # NIFTY 50 + NEXT 50 universe
+psql -d tapetrend -f db/migration_004_alerts_table.sql    # alerts table
 ```
 
 ## 2 · Backend (port 8000)
@@ -32,6 +38,8 @@ Open http://localhost:8000/docs for the interactive API.
 First-time warm-up (fills the psql cache from yfinance):
 ```bash
 curl -X POST http://localhost:8000/api/fundamentals/refresh-all
+# runs in the background (~1.5 s per symbol); poll progress with:
+curl http://localhost:8000/api/fundamentals/refresh-status
 # candles auto-fetch lazily per symbol on first request
 ```
 
@@ -49,20 +57,24 @@ Next.js (TradingView charts, Recharts curves, Tailwind)
    │  fetch http://localhost:8000/api/*
    ▼
 FastAPI ── services: data (yfinance→psql cache) · indicators (pandas)
-   │                 signals · backtest (fees+slippage) · news
+   │                 signals · sectors · backtest (fees+slippage) · news
+   │                 alerts_check (background loop, every 5 min)
    ▼
-PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs
+PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs · alerts
 ```
 
 ## Key API routes
 | Route | What |
 |---|---|
 | `GET /api/watchlist` · `POST/DELETE /api/watchlist/{sym}` | quotes for saved symbols |
+| `POST /api/symbols` · `DELETE /api/symbols/{sym}` | add/remove any Yahoo-valid ticker |
 | `GET /api/candles/{sym}?indicators=true` | OHLCV + EMA/RSI/MACD/BB/ATR |
-| `GET /api/signals` | triggered swing setups across the universe |
-| `GET /api/screener?max_pe=30&min_roe=15&above_ema50=true` | blended screen |
+| `GET /api/signals` · `GET /api/signals/{sym}` | triggered swing setups + ATR trade plan |
+| `GET /api/screener?max_pe=30&min_roe=15&above_ema50=true&min_rvol=1.5` | blended screen, ranked by score |
+| `GET /api/sectors?market=IN` | sector rotation snapshot |
 | `POST /api/backtest` `{symbol,strategy,params}` | emax / rsi / macd with fee_bps, slip_bps |
-| `GET /api/portfolio` · `POST /api/portfolio/tx` | positions, avg cost, P&L |
+| `GET /api/portfolio` · `POST /api/portfolio/tx` | positions, avg cost, P&L, journal |
+| `GET/POST /api/alerts` · `POST /api/alerts/check` | price/RSI alerts, manual check-now |
 | `GET /api/news` | yfinance ticker news + NewsAPI headlines (optional key) |
 
 ## Extending
@@ -70,6 +82,6 @@ PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs
   `services/data.py` (note SEBI's static-IP rule for API *trading* from Apr 2026).
 - **Better backtests**: swap `services/backtest.py` for `vectorbt` or `backtesting.py`.
 - **Intraday**: add an `interval` column to `ohlcv` and fetch `1h`/`15m` from yfinance.
-- **Options**: add an option-chain service (broker API or `nsepython`) and port the
-  payoff builder from the HTML prototype.
+- **Real option chains**: the Options lab uses synthetic strikes/premiums — wire an
+  option-chain service (broker API or `nsepython`) into it for live quotes.
 - **Time-series speed**: install the TimescaleDB extension and make `ohlcv` a hypertable.

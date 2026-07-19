@@ -6,16 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tape & Trend: a full-stack trading workbench (educational, not investment advice) covering
 IN (NSE/BSE) + US equities — watchlist/quotes, TradingView charts, a swing-signal engine,
-fundamental+technical screener, backtester, portfolio/journal, price/RSI alerts, risk sizing,
-and news. Next.js frontend, FastAPI backend, PostgreSQL as cache + system of record.
+fundamental+technical screener, sector rotation view, options payoff lab, backtester,
+portfolio/journal, price/RSI alerts, risk sizing, and news. Next.js frontend, FastAPI backend, PostgreSQL as cache + system of record.
 
 ## Commands
 
 **Database** (PostgreSQL must be running locally, db name `tapetrend`):
 ```bash
 createdb tapetrend
-psql -d tapetrend -f db/schema.sql          # base tables + seed symbols/watchlist
-psql -d tapetrend -f db/migration_002.sql   # additive migrations, run in order if present
+psql -d tapetrend -f db/schema.sql                        # base tables + seed symbols/watchlist
+psql -d tapetrend -f db/migration_002.sql                 # AI-stocks universe (see Known inconsistency)
+psql -d tapetrend -f db/migration_003_nifty_universe.sql  # NIFTY 50 + NEXT 50 universe
+psql -d tapetrend -f db/migration_004_alerts_table.sql    # alerts table
 ```
 
 **Backend** (FastAPI, port 8000, from `backend/`):
@@ -79,8 +81,11 @@ separately (`refresh_fundamentals`, on-demand via `/api/fundamentals/{symbol}/re
 implementations (no TA-Lib) — sma/ema/rsi/macd/bollinger/atr — and `enrich(df)` attaches the
 standard set (ema20/ema50/sma200/rsi14/macd_h/bollinger/atr14/vol20/hi20/lo20) used everywhere
 else. `services/signals.py` (`analyse`) runs a fixed rule set over the enriched last two bars to
-emit BUY/SELL/WATCH signals with a conviction `score`, plus an ATR-based entry/stop/target —
-this is the shared building block for the signals page, the screener's ranking, and alerts.
+emit BUY/SELL/WATCH signals with a direction-aware conviction `score` (conflicting BUY/SELL
+signals net out; the RVOL bonus only counts when at least one rule fired), plus an ATR-based
+entry/stop/target that follows the dominant `direction` (`LONG`/`SHORT`; long when there is no
+edge, so the risk calculator can always load a plan) — this is the shared building block for
+the signals page, Today's Focus, the screener's ranking, and alerts.
 
 **Backtester** (`services/backtest.py`) is vectorized numpy over `enrich()`'d candles, long-only,
 three built-in strategies (`emax`, `rsi`, `macd`) selected by string, with per-side fee/slippage
@@ -114,6 +119,8 @@ corresponding page under `frontend/app/<route>/` plus a `Nav.jsx` entry.
 
 `db/migration_002.sql`'s content is actually the "AI-focused universe expansion" migration
 (its own header comment calls it `migration_003_ai_stocks.sql`), while `UPDATE-INSTRUCTIONS.md`
-describes a *different* migration (journal/risk/alerts schema changes) as "migration_002". If
-you're adding a new migration file, check what's actually in `db/` rather than trusting either
-document's numbering, and pick the next free `migration_NNN.sql` number.
+describes a *different* migration (journal/risk/alerts schema changes) as "migration_002".
+`db/` currently contains `migration_002.sql` (AI universe), `migration_003_nifty_universe.sql`,
+and `migration_004_alerts_table.sql` — so the next free number is `migration_005`. If you're
+adding a new migration file, check what's actually in `db/` rather than trusting either
+document's numbering.
