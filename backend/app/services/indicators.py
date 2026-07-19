@@ -13,7 +13,9 @@ def rsi(s: pd.Series, n: int = 14) -> pd.Series:
     up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
     dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
     rs = up / dn.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    out = 100 - 100 / (1 + rs)
+    # zero losses so far would leave NaN: all-gains reads 100, truly flat reads 50
+    return out.where(dn != 0, np.where(up > 0, 100.0, 50.0))
 
 def macd(s: pd.Series, fast=12, slow=26, sig=9):
     m = ema(s, fast) - ema(s, slow)

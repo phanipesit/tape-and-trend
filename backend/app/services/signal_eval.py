@@ -13,7 +13,7 @@ after EXPIRE_BARS bars. R is signed: -1.0 = full stop, +2.0 = twice the risk.
 import logging
 from ..db import q
 from .data import all_symbols, get_candles
-from .signals import analyse
+from .signals import analyse, STOP_ATR, TARGET_ATR
 
 log = logging.getLogger(__name__)
 
@@ -35,9 +35,11 @@ def snapshot_today() -> int:
             if s["type"] not in ("BUY", "SELL") or not atr:
                 continue
             if s["type"] == "BUY":
-                direction, stop, target = "LONG", close - 1.5 * atr, close + 3 * atr
+                direction = "LONG"
+                stop, target = close - STOP_ATR * atr, close + TARGET_ATR * atr
             else:
-                direction, stop, target = "SHORT", close + 1.5 * atr, close - 3 * atr
+                direction = "SHORT"
+                stop, target = close + STOP_ATR * atr, close - TARGET_ATR * atr
             rows = q("""INSERT INTO signal_outcomes
                           (symbol, signal_date, setup_tag, sig_type, direction,
                            entry, stop, target, atr, score, market)
@@ -50,6 +52,40 @@ def snapshot_today() -> int:
             logged += len(rows)
     return logged
 
+def score_signal(direction: str, entry: float, stop: float, target: float, after) -> dict | None:
+    """Pure forward-walk over the bars after the signal (max EXPIRE_BARS rows used).
+
+    Returns {outcome, exit_price, exit_date, bars_held, r_multiple} once resolved,
+    or None while the signal is still open (or unscorable). Stop wins when stop and
+    target both fall inside one bar; r_multiple is signed and risk-normalised.
+    """
+    after = after.head(EXPIRE_BARS)
+    if after.empty:
+        return None
+    is_long = direction == "LONG"
+    risk = abs(entry - stop)
+    if not risk:
+        return None
+    outcome = exit_price = exit_date = None
+    bars = 0
+    for _, row in after.iterrows():
+        bars += 1
+        h, l = float(row.h), float(row.l)
+        if (l <= stop if is_long else h >= stop):
+            outcome, exit_price, exit_date = "stop_hit", stop, row.d
+            break
+        if (h >= target if is_long else l <= target):
+            outcome, exit_price, exit_date = "target_hit", target, row.d
+            break
+    if outcome is None:
+        if len(after) < EXPIRE_BARS:
+            return None   # still open — not enough bars yet
+        last = after.iloc[-1]
+        outcome, exit_price, exit_date = "expired", float(last.c), last.d
+    r = (exit_price - entry) / risk if is_long else (entry - exit_price) / risk
+    return {"outcome": outcome, "exit_price": exit_price, "exit_date": exit_date,
+            "bars_held": bars, "r_multiple": round(r, 2)}
+
 def evaluate_open() -> int:
     rows = q("""SELECT * FROM signal_outcomes
                 WHERE outcome IS NULL AND signal_date < CURRENT_DATE
@@ -60,35 +96,15 @@ def evaluate_open() -> int:
             df = get_candles(sig["symbol"], limit=EXPIRE_BARS + 60, auto=False)
             if df.empty:
                 continue
-            after = df[df["d"] > sig["signal_date"]].head(EXPIRE_BARS)
-            if after.empty:
+            res = score_signal(sig["direction"], float(sig["entry"]), float(sig["stop"]),
+                               float(sig["target"]), df[df["d"] > sig["signal_date"]])
+            if res is None:
                 continue
-            entry, stop, target = float(sig["entry"]), float(sig["stop"]), float(sig["target"])
-            is_long = sig["direction"] == "LONG"
-            risk = abs(entry - stop)
-            if not risk:
-                continue
-            outcome = exit_price = exit_date = None
-            bars = 0
-            for _, row in after.iterrows():
-                bars += 1
-                h, l = float(row.h), float(row.l)
-                if (l <= stop if is_long else h >= stop):
-                    outcome, exit_price, exit_date = "stop_hit", stop, row.d
-                    break
-                if (h >= target if is_long else l <= target):
-                    outcome, exit_price, exit_date = "target_hit", target, row.d
-                    break
-            if outcome is None:
-                if len(after) < EXPIRE_BARS:
-                    continue   # still open — not enough bars yet, check again tomorrow
-                last = after.iloc[-1]
-                outcome, exit_price, exit_date = "expired", float(last.c), last.d
-            r = (exit_price - entry) / risk if is_long else (entry - exit_price) / risk
             q("""UPDATE signal_outcomes
                  SET outcome=:o, exit_price=:e, exit_date=:d, bars_held=:b, r_multiple=:r
                  WHERE id=:i""",
-              o=outcome, e=round(exit_price, 4), d=exit_date, b=bars, r=round(r, 2), i=sig["id"])
+              o=res["outcome"], e=round(res["exit_price"], 4), d=res["exit_date"],
+              b=res["bars_held"], r=res["r_multiple"], i=sig["id"])
             scored += 1
         except Exception:
             log.warning("signal eval failed for id=%s (%s)", sig["id"], sig["symbol"], exc_info=True)

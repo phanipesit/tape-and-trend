@@ -40,8 +40,14 @@ npm run start    # serve production build
 **Both at once**: `start.bat` (Windows) launches backend + frontend in separate windows and
 opens the browser — paths inside it are hardcoded to this checkout's location.
 
-There is no test suite, linter, or type checker configured in this repo (no pytest/jest/eslint
-config present) — don't invent commands for these.
+**Backend tests** (pytest, from `backend/` with the venv active):
+```bash
+python -m pytest          # fast, DB-free: synthetic candles + monkeypatched q()
+```
+Tests live in `backend/tests/` and cover indicators, signal rules (`analyse_df`), the
+signal-outcome scorer (`score_signal`), portfolio replay/stats, and backtester math.
+There is still no frontend test runner, linter, or type checker — don't invent commands
+for those.
 
 ## Architecture
 
@@ -53,14 +59,15 @@ Next.js (frontend/)                 fetch → http://localhost:8000/api/*
    ▼
 FastAPI (backend/app/)
    main.py            — creates app, mounts every router, runs a background asyncio task
-                         that calls services/alerts_check.check_all() every 5 min
+                         that calls services/alerts_check.check_all() every 5 min and the
+                         signal tracker (services/signal_eval snapshot+evaluate) once a day
    routers/*.py        — thin: parse request, call a service function, return dict/list
    services/*.py        — all business logic lives here (see below)
    db.py                — single helper `q(sql, **params)` over SQLAlchemy Core; no ORM models
    config.py             — env vars via python-dotenv
    ▼
-PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs · alerts (+ whatever
-            each migration_NNN.sql under db/ adds)
+PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs · alerts ·
+            signal_outcomes (+ whatever each migration_NNN.sql under db/ adds)
 ```
 
 **Router ↔ service split is the core convention.** Routers under `backend/app/routers/`
@@ -90,8 +97,11 @@ the signals page, Today's Focus, the screener's ranking, and alerts.
 **Backtester** (`services/backtest.py`) is vectorized numpy over `enrich()`'d candles, long-only,
 four built-in strategies (`emax`, `rsi`, `macd`, `signal`) selected by string, with per-side
 fee/slippage in bps. `signal` replays the live swing engine's BUY/SELL rules — its thresholds
-are duplicated from `services/signals.py` and must be kept in sync when the rule set changes. Every run is persisted to `backtest_runs` as a side effect of `run()` — there's no
-separate "save" step. The `/runs` frontend page reads that table back.
+are imported from `services/signals.py` (`RSI_OVERSOLD`, `RSI_OVERBOUGHT`, `BREAKOUT_RVOL`,
+`STOP_ATR`, `TARGET_ATR`), so changing them there updates the live engine, the backtester and
+signal_eval's plans together; the *structure* of the rules (crossover logic etc.) is still
+mirrored by hand in both files. Every run is persisted to `backtest_runs` as a side effect of
+`run()` — there's no separate "save" step. The `/runs` frontend page reads that table back.
 
 **Alerts**: `services/alerts_check.check_all()` polls all rows in `alerts` against live
 price/RSI and marks `triggered_at`/`triggered_value` when a condition fires; it's called both
