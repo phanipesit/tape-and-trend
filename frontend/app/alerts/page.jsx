@@ -14,8 +14,18 @@ function AlertsInner() {
   const [rows, setRows] = useState([]);
   const [f, setF] = useState({ symbol: sp.get("symbol") || "RELIANCE", condition: "price_above", threshold: "" });
   const [busy, setBusy] = useState(false);
+  const [notif, setNotif] = useState("unsupported");
   const load = () => api("/api/alerts").then(setRows).catch(() => {});
-  useEffect(() => { load(); api("/api/symbols").then(setSyms).catch(() => {}); }, []);
+  useEffect(() => {
+    load(); api("/api/symbols").then(setSyms).catch(() => {});
+    if (typeof Notification !== "undefined") setNotif(Notification.permission);
+  }, []);
+
+  const enableNotif = async () => {
+    const p = await Notification.requestPermission();
+    setNotif(p);
+    if (p === "granted") new Notification("Tape & Trend", { body: "Browser notifications are on — you'll be pinged when an alert fires." });
+  };
 
   const add = async () => {
     if (!f.threshold) return alert("Enter a threshold value");
@@ -41,6 +51,9 @@ function AlertsInner() {
         <label className="flex flex-col gap-1 text-mut">Threshold<input className="w-28" type="number" step="0.05" value={f.threshold} onChange={(e) => setF({ ...f, threshold: e.target.value })} /></label>
         <button className="btn" onClick={add}>Create alert</button>
         <button className="ghost" onClick={checkNow} disabled={busy}>{busy ? "Checking…" : "Check now"}</button>
+        {notif === "default" && <button className="ghost" onClick={enableNotif}>🔔 Enable browser notifications</button>}
+        {notif === "granted" && <span className="text-up">🔔 Notifications on</span>}
+        {notif === "denied" && <span className="text-dim" title="Notifications are blocked for this site — allow them in your browser's site settings">🔕 Notifications blocked</span>}
       </div>
       <div className="card overflow-x-auto">
         <table className="w-full"><thead><tr>

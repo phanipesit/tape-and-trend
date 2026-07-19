@@ -51,7 +51,9 @@ export default function Dashboard() {
             <tbody>{watch.map((q) => (
               <tr key={q.symbol}>
                 <td><Link className="font-bold hover:text-brass" href={`/charts?symbol=${q.symbol}`}>{q.symbol}</Link></td>
-                <td>{fmt(q.price)}</td>
+                <td>{fmt(q.price)}{q.stale && (
+                  <span className="text-brass text-[10px] ml-1 cursor-help"
+                    title={`Live refresh failed — showing cached bar from ${q.date || "an earlier session"}`}>⚠ stale</span>)}</td>
                 <td className={q.pct >= 0 ? "text-up" : "text-down"}>{q.pct >= 0 ? "+" : ""}{fmt(q.pct)}%</td>
                 <td><button className="ghost !px-2 !py-0.5" title="Remove from watchlist" onClick={() => unwatch(q.symbol)}>✕</button></td>
               </tr>))}</tbody>

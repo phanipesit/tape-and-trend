@@ -62,6 +62,7 @@ def all_symbols(market: str | None = None) -> list[dict]:
     return q("SELECT * FROM symbols ORDER BY market, symbol")
 
 _last_fetch: dict[str, datetime] = {}
+_fetch_failed: set[str] = set()   # symbols whose most recent refresh attempt errored
 
 def _cache_fresh(symbol: str) -> bool:
     rows = q("SELECT max(d) AS last FROM ohlcv WHERE symbol=:s", s=symbol)
@@ -91,6 +92,7 @@ def refresh_candles(symbol: str, period: str = "2y") -> int:
                         symbol, ysym, len(df), alt, len(alt_df))
             df = alt_df
     _last_fetch[symbol] = datetime.now(timezone.utc)
+    _fetch_failed.discard(symbol)
     if df.empty:
         return 0
     if isinstance(df.columns, pd.MultiIndex):
@@ -113,6 +115,7 @@ def get_candles(symbol: str, limit: int = 500, auto: bool = True) -> pd.DataFram
         try:
             refresh_candles(symbol)
         except Exception:
+            _fetch_failed.add(symbol)
             log.warning("candle refresh failed for %s, serving stale cache", symbol, exc_info=True)
     rows = q("SELECT d,o,h,l,c,v FROM ohlcv WHERE symbol=:s ORDER BY d DESC LIMIT :n",
              s=symbol, n=limit)
@@ -162,9 +165,9 @@ def quote(symbol: str) -> dict:
     if len(df) < 2:
         df = get_candles(symbol, limit=2, auto=True)
     if df.empty:
-        return {"symbol": symbol, "price": None, "change": None, "pct": None}
+        return {"symbol": symbol, "price": None, "change": None, "pct": None, "stale": True}
     last, prev = df.iloc[-1], df.iloc[-2] if len(df) > 1 else df.iloc[-1]
     return {"symbol": symbol, "price": float(last.c),
             "change": float(last.c - prev.c),
             "pct": float((last.c / prev.c - 1) * 100) if prev.c else 0.0,
-            "date": str(last.d)}
+            "date": str(last.d), "stale": symbol in _fetch_failed}
