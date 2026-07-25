@@ -7,7 +7,7 @@ import { api, fmt } from "../../lib/api";
 function BacktestInner() {
   const sp = useSearchParams();
   const [syms, setSyms] = useState([]);
-  const [form, setForm] = useState({ symbol: sp.get("symbol") || "TCS", strategy: "emax", fast: 20, slow: 50, buy: 30, sell: 60, fee_bps: 5, slip_bps: 5 });
+  const [form, setForm] = useState({ symbol: sp.get("symbol") || "TCS", strategy: "emax", fast: 20, slow: 50, buy: 30, sell: 60, rsi2_buy: 5, entry_days: 20, exit_days: 10, fee_bps: 5, slip_bps: 5 });
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { api("/api/symbols").then(setSyms).catch(() => {}); }, []);
@@ -30,13 +30,20 @@ function BacktestInner() {
         <select value={form.symbol} onChange={set("symbol")}>{syms.map((s) => <option key={s.symbol}>{s.symbol}</option>)}</select>
         <select value={form.strategy} onChange={set("strategy")}>
           <option value="emax">EMA crossover</option><option value="rsi">RSI mean reversion</option><option value="macd">MACD flip</option>
-          <option value="signal">Live signal engine</option></select>
+          <option value="signal">Live signal engine</option>
+          <option value="rsi2">RSI(2) mean reversion</option><option value="donchian">Donchian breakout (Turtle)</option></select>
         {form.strategy === "emax" && <>
           <label className="flex flex-col gap-1 text-mut">Fast<input className="w-16" type="number" value={form.fast} onChange={set("fast")} /></label>
           <label className="flex flex-col gap-1 text-mut">Slow<input className="w-16" type="number" value={form.slow} onChange={set("slow")} /></label></>}
         {form.strategy === "rsi" && <>
           <label className="flex flex-col gap-1 text-mut">Buy&lt;<input className="w-16" type="number" value={form.buy} onChange={set("buy")} /></label>
           <label className="flex flex-col gap-1 text-mut">Sell&gt;<input className="w-16" type="number" value={form.sell} onChange={set("sell")} /></label></>}
+        {form.strategy === "rsi2" && <>
+          <label className="flex flex-col gap-1 text-mut">RSI(2) buy&lt;<input className="w-16" type="number" value={form.rsi2_buy} onChange={set("rsi2_buy")} /></label>
+          <span className="text-dim pb-2">only long above 200-day SMA · exits above 5-day SMA</span></>}
+        {form.strategy === "donchian" && <>
+          <label className="flex flex-col gap-1 text-mut">Entry days<input className="w-16" type="number" value={form.entry_days} onChange={set("entry_days")} /></label>
+          <label className="flex flex-col gap-1 text-mut">Exit days<input className="w-16" type="number" value={form.exit_days} onChange={set("exit_days")} /></label></>}
         <label className="flex flex-col gap-1 text-mut">Fee bps<input className="w-16" type="number" value={form.fee_bps} onChange={set("fee_bps")} /></label>
         <label className="flex flex-col gap-1 text-mut">Slip bps<input className="w-16" type="number" value={form.slip_bps} onChange={set("slip_bps")} /></label>
         <button className="btn" onClick={run} disabled={busy}>{busy ? "Running…" : "Run backtest"}</button>

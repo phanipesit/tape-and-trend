@@ -2,7 +2,7 @@
 import json
 import numpy as np
 from .data import get_candles
-from .indicators import enrich
+from .indicators import enrich, rsi, sma
 from .signals import RSI_OVERSOLD, RSI_OVERBOUGHT, BREAKOUT_RVOL
 from ..db import q
 
@@ -39,6 +39,25 @@ def run(symbol: str, strategy: str, params: dict) -> dict:
         cross_dn = (e20 < e50) & np.roll(e20 >= e50, 1)
         entry_sig = cross_up | ((r < RSI_OVERSOLD) & (c > s200)) | ((c > hi) & (v > BREAKOUT_RVOL * v20))
         exit_sig = cross_dn | ((r > RSI_OVERBOUGHT) & (h < np.roll(h, 1))) | (c < lo)
+    elif strategy == "rsi2":
+        # Larry Connors' RSI(2) mean reversion: only long while above the 200-day
+        # trend filter, buy a sharp 2-period RSI dip, exit on reversion above the
+        # 5-day average — a fast, high-turnover system (holds days, not weeks)
+        r2 = rsi(df["c"], 2).to_numpy()
+        s200 = df["sma200"].to_numpy()
+        s5 = sma(df["c"], 5).to_numpy()
+        entry_sig = (c > s200) & (r2 < params.get("rsi2_buy", 5))
+        exit_sig = c > s5
+    elif strategy == "donchian":
+        # Turtle-style trend following: buy an N-day high breakout, exit on an
+        # M-day low breakdown. Wins less often than it loses; the edge is letting
+        # the rare big trend run rather than a high hit rate.
+        entry_days = params.get("entry_days", 20)
+        exit_days = params.get("exit_days", 10)
+        hi_n = df["h"].shift(1).rolling(entry_days).max().to_numpy()
+        lo_n = df["l"].shift(1).rolling(exit_days).min().to_numpy()
+        entry_sig = c > hi_n
+        exit_sig = c < lo_n
     else:
         return {"error": f"unknown strategy {strategy}"}
 

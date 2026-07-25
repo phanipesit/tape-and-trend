@@ -95,7 +95,8 @@ edge, so the risk calculator can always load a plan) — this is the shared buil
 the signals page, Today's Focus, the screener's ranking, and alerts.
 
 **Backtester** (`services/backtest.py`) is vectorized numpy over `enrich()`'d candles, long-only,
-four built-in strategies (`emax`, `rsi`, `macd`, `signal`) selected by string, with per-side
+six built-in strategies (`emax`, `rsi`, `macd`, `signal`, `rsi2`, `donchian`) selected by string,
+with per-side
 fee/slippage in bps. `signal` replays the live swing engine's BUY/SELL rules — its thresholds
 are imported from `services/signals.py` (`RSI_OVERSOLD`, `RSI_OVERBOUGHT`, `BREAKOUT_RVOL`,
 `STOP_ATR`, `TARGET_ATR`), so changing them there updates the live engine, the backtester and
