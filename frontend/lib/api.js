@@ -10,10 +10,18 @@ export async function api(path, opts = {}) {
   return res.json();
 }
 
-// TradingView symbol mapping — no hardcoded lists.
+// TradingView symbol mapping — the one hardcoded list is this index map, since our
+// ^-prefixed index tickers are Yahoo's convention (data.py's yf_symbol), not
+// TradingView's — TradingView needs its own symbol regardless of exchange/market.
+const TV_INDEX_MAP = { "^NSEI": "NSE:NIFTY", "^NSEBANK": "NSE:BANKNIFTY", "^GSPC": "TVC:SPX" };
+
 // US: bare symbol (TradingView resolves NYSE/NASDAQ itself).
-// India: BSE:<symbol> (free widgets serve BSE reliably; prices ≈ NSE).
-export const tvSymbol = (s, market) => (market === "IN" ? `BSE:${s}` : s);
+// India: BSE:<symbol> by default (free widgets serve BSE reliably; prices ≈ NSE) —
+// but BSE only carries Daily/Weekly/Monthly on the free tier, no intraday. Callers
+// that need minute-level charting (the day-trading page) pass exchange="NSE" instead,
+// which does carry intraday data for free.
+export const tvSymbol = (s, market, exchange = "BSE") =>
+  TV_INDEX_MAP[s] || (market === "IN" ? `${exchange}:${s}` : s);
 
 export const fmt = (n, dp = 2) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: dp, minimumFractionDigits: dp });

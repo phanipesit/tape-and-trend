@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { tvSymbol } from "../lib/api";
 
-export default function TVChart({ symbol = "RELIANCE", market = "IN", interval = "D" }) {
+export default function TVChart({ symbol = "RELIANCE", market = "IN", interval = "D", exchange = "BSE" }) {
   const ref = useRef(null);
   const wrapRef = useRef(null);
 
@@ -13,12 +13,12 @@ export default function TVChart({ symbol = "RELIANCE", market = "IN", interval =
     s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     s.async = true;
     s.innerHTML = JSON.stringify({
-      symbol: tvSymbol(symbol, market), theme: "dark", interval, style: "1",
+      symbol: tvSymbol(symbol, market, exchange), theme: "dark", interval, style: "1",
       locale: "en", autosize: true, withdateranges: true, allow_symbol_change: true,
       studies: ["STD;EMA", "STD;RSI", "STD;MACD"],
     });
     ref.current.appendChild(s);
-  }, [symbol, market, interval]);
+  }, [symbol, market, interval, exchange]);
 
   const toggleFull = () => {
     if (!document.fullscreenElement) wrapRef.current?.requestFullscreen?.();

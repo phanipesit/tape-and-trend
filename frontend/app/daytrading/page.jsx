@@ -45,7 +45,7 @@ export default function DayTrading() {
         swing-timeframe indicators used elsewhere in this app. Refreshes every 60s while
         this page is open.
       </p>
-      <TVChart symbol={symbol} market={market} interval={INTERVALS[interval]} />
+      <TVChart symbol={symbol} market={market} interval={INTERVALS[interval]} exchange="NSE" />
 
       {err && <div className="card border-down text-down text-sm">Backend unreachable — is uvicorn running on :8000? {err}</div>}
       {a?.error && <div className="card text-down text-sm">{a.error}</div>}
