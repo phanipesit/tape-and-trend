@@ -46,6 +46,8 @@ def usd_inr_rate() -> float:
     return _fx_cache["rate"] or USD_INR_FALLBACK
 
 def yf_symbol(symbol: str, market: str) -> str:
+    if symbol.startswith("^"):   # index ticker (e.g. ^NSEI, ^GSPC) — already the exact Yahoo symbol
+        return symbol
     if market == "IN":
         return f"{symbol}.BO" if symbol in BSE_OVERRIDE else f"{symbol}.NS"
     return symbol
@@ -56,10 +58,21 @@ def get_symbol(symbol: str) -> dict:
         raise ValueError(f"unknown symbol {symbol}")
     return rows[0]
 
-def all_symbols(market: str | None = None) -> list[dict]:
+def all_symbols(market: str | None = None, include_index: bool = False) -> list[dict]:
+    conds, params = [], {}
+    if not include_index:
+        conds.append("is_index = false")
     if market in ("IN", "US"):
-        return q("SELECT * FROM symbols WHERE market=:m ORDER BY symbol", m=market)
-    return q("SELECT * FROM symbols ORDER BY market, symbol")
+        conds.append("market = :m")
+        params["m"] = market
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    return q(f"SELECT * FROM symbols {where} ORDER BY market, symbol", **params)
+
+def get_index_symbol(market: str) -> str:
+    rows = q("SELECT symbol FROM symbols WHERE market=:m AND is_index=true LIMIT 1", m=market)
+    if not rows:
+        raise ValueError(f"no index symbol configured for market {market}")
+    return rows[0]["symbol"]
 
 _last_fetch: dict[str, datetime] = {}
 _fetch_failed: set[str] = set()   # symbols whose most recent refresh attempt errored

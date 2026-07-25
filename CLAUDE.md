@@ -67,7 +67,7 @@ FastAPI (backend/app/)
    config.py             — env vars via python-dotenv
    ▼
 PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs · alerts ·
-            signal_outcomes (+ whatever each migration_NNN.sql under db/ adds)
+            signal_outcomes · rotation_runs (+ whatever each migration_NNN.sql under db/ adds)
 ```
 
 **Router ↔ service split is the core convention.** Routers under `backend/app/routers/`
@@ -103,6 +103,23 @@ are imported from `services/signals.py` (`RSI_OVERSOLD`, `RSI_OVERBOUGHT`, `BREA
 signal_eval's plans together; the *structure* of the rules (crossover logic etc.) is still
 mirrored by hand in both files. Every run is persisted to `backtest_runs` as a side effect of
 `run()` — there's no separate "save" step. The `/runs` frontend page reads that table back.
+`services/perf.py`'s `perf_stats(curve)` (CAGR/Sharpe/max-drawdown/total-return) is shared
+between `backtest.py` and `rotation.py` so both engines report numbers the same way.
+
+**Rotation backtester** (`services/rotation.py`) is a separate, portfolio-level engine —
+`backtest.py` only ever tests one symbol against itself, but momentum rotation
+(Clenow's "Stocks on the Move") ranks a whole market universe and rotates a basket of the
+top N, which needs cross-symbol bookkeeping the single-symbol engine can't do. It reads
+only cached candles in one batched query per run (same precondition as `services/sectors.py`
+— never a live yfinance refresh per symbol, since that's what `routers/screener.py`'s
+"multi-minute run" comment warns against for a ~100-symbol universe). Momentum is a
+closed-form rolling OLS on log(close) (`(1+slope)**252 * r_squared`, Clenow's published
+formula) — not `rolling().apply()`, which would be far slower. The market-regime filter
+(index above its own 200-day SMA) needs index-level price data; `^NSEI`/`^GSPC` are seeded
+as ordinary `symbols` rows with `is_index=true`, cached through the exact same
+`refresh_candles`/`get_candles` path as any stock, but excluded from `all_symbols()` by
+default (pass `include_index=True` to see them) so they never show up in stock-picker
+dropdowns. Persists summaries to `rotation_runs`, read back by the `/rotation` page.
 
 **Alerts**: `services/alerts_check.check_all()` polls all rows in `alerts` against live
 price/RSI and marks `triggered_at`/`triggered_value` when a condition fires; it's called both

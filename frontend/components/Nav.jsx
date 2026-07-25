@@ -8,7 +8,7 @@ const ITEMS = [
   ["/", "Dashboard"], ["/charts", "Charts"], ["/signals", "Swing signals"],
   ["/edge", "Your edge"],
   ["/screener", "Screener"], ["/sectors", "Sectors"], ["/options", "Options lab"],
-  ["/backtest", "Backtest"], ["/runs", "Runs"],
+  ["/backtest", "Backtest"], ["/rotation", "Rotation"], ["/runs", "Runs"],
   ["/risk", "Risk calc"], ["/alerts", "Alerts"],
   ["/portfolio", "Portfolio"], ["/news", "News"],
 ];
