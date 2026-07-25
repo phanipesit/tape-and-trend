@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import CORS_ORIGINS
 from .routers import (quotes, candles, screener, signals, backtest,
                       portfolio, news, alerts, symbols_admin, sectors, ai,
-                      performance, rotation)
+                      performance, rotation, intraday)
 from .services.alerts_check import check_all
 from .services.signal_eval import snapshot_today, evaluate_open
 from .db import q
@@ -18,7 +18,7 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS,
                    allow_methods=["*"], allow_headers=["*"])
 
 for r in (quotes, candles, screener, signals, backtest,
-          portfolio, news, alerts, symbols_admin, sectors, ai, performance, rotation):
+          portfolio, news, alerts, symbols_admin, sectors, ai, performance, rotation, intraday):
     app.include_router(r.router)
 
 @app.on_event("startup")

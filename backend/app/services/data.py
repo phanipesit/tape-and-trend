@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
 from ..db import q, engine
-from ..config import CANDLE_STALE_HOURS, FX_STALE_MINUTES, USD_INR_FALLBACK
+from ..config import CANDLE_STALE_HOURS, FX_STALE_MINUTES, USD_INR_FALLBACK, INTRADAY_STALE_MINUTES
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +136,55 @@ def get_candles(symbol: str, limit: int = 500, auto: bool = True) -> pd.DataFram
     if not df.empty:
         df[["o", "h", "l", "c"]] = df[["o", "h", "l", "c"]].astype(float)
         df["v"] = df["v"].astype("int64")
+    return df
+
+# Yahoo's real intraday history limits (verified live against this app's pinned
+# yfinance version): 1m bars only go back 7 days, 5m/15m go back 60 days.
+_INTRADAY_PERIOD = {"1m": "7d", "5m": "60d", "15m": "60d"}
+_intraday_last_fetch: dict[tuple[str, str], datetime] = {}
+
+def _intraday_cache_fresh(symbol: str, interval: str) -> bool:
+    at = _intraday_last_fetch.get((symbol, interval))
+    return at is not None and datetime.now(timezone.utc) - at < timedelta(minutes=INTRADAY_STALE_MINUTES)
+
+def refresh_intraday(symbol: str, interval: str = "5m") -> int:
+    if interval not in _INTRADAY_PERIOD:
+        raise ValueError(f"unsupported intraday interval {interval}")
+    meta = get_symbol(symbol)
+    ysym = yf_symbol(symbol, meta["market"])
+    df = yf_download(ysym, period=_INTRADAY_PERIOD[interval], interval=interval, auto_adjust=True)
+    _intraday_last_fetch[(symbol, interval)] = datetime.now(timezone.utc)
+    if df.empty:
+        return 0
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.rename(columns={"Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"})
+    df = df[["o", "h", "l", "c", "v"]].dropna()
+    rows = [(symbol, interval, ts.to_pydatetime(), float(r.o), float(r.h), float(r.l),
+            float(r.c), int(r.v or 0)) for ts, r in df.iterrows()]
+    with engine.begin() as cx:
+        cx.exec_driver_sql(
+            "INSERT INTO intraday_ohlcv (symbol,interval,ts,o,h,l,c,v) VALUES "
+            + ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s)"] * len(rows))
+            + """ ON CONFLICT (symbol,interval,ts) DO UPDATE SET o=EXCLUDED.o,h=EXCLUDED.h,
+                  l=EXCLUDED.l,c=EXCLUDED.c,v=EXCLUDED.v""",
+            tuple(p for row in rows for p in row))
+    return len(rows)
+
+def get_intraday(symbol: str, interval: str = "5m", limit: int = 500, auto: bool = True) -> pd.DataFrame:
+    if auto and not _intraday_cache_fresh(symbol, interval):
+        try:
+            refresh_intraday(symbol, interval)
+        except Exception:
+            log.warning("intraday refresh failed for %s@%s, serving stale cache",
+                       symbol, interval, exc_info=True)
+    rows = q("""SELECT ts,o,h,l,c,v FROM intraday_ohlcv WHERE symbol=:s AND interval=:i
+                ORDER BY ts DESC LIMIT :n""", s=symbol, i=interval, n=limit)
+    df = pd.DataFrame(rows[::-1])
+    if not df.empty:
+        df[["o", "h", "l", "c"]] = df[["o", "h", "l", "c"]].astype(float)
+        df["v"] = df["v"].astype("int64")
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
     return df
 
 def refresh_fundamentals(symbol: str) -> dict:

@@ -66,8 +66,8 @@ FastAPI (backend/app/)
    db.py                — single helper `q(sql, **params)` over SQLAlchemy Core; no ORM models
    config.py             — env vars via python-dotenv
    ▼
-PostgreSQL: symbols · ohlcv · watchlist · portfolio_tx · backtest_runs · alerts ·
-            signal_outcomes · rotation_runs (+ whatever each migration_NNN.sql under db/ adds)
+PostgreSQL: symbols · ohlcv · intraday_ohlcv · watchlist · portfolio_tx · backtest_runs ·
+            alerts · signal_outcomes · rotation_runs (+ whatever each migration_NNN.sql under db/ adds)
 ```
 
 **Router ↔ service split is the core convention.** Routers under `backend/app/routers/`
@@ -84,6 +84,18 @@ symbols map to Yahoo's `.NS` (NSE) suffix by default, `.BO` (BSE) for names list
 separately (`refresh_fundamentals`, on-demand via `/api/fundamentals/{symbol}/refresh` or
 `/refresh-all`) and cached on the `symbols` row, not versioned in `ohlcv`.
 
+**Intraday data is a separate, parallel cache**, not a variant of the daily one:
+`intraday_ohlcv` is timestamp-grained (`PRIMARY KEY (symbol, interval, ts)` — `interval`
+is part of the key because 1m/5m/15m bars for the same symbol land on overlapping
+timestamps) rather than date-grained. Still fetched through `services/data.py` (the
+"only place that talks to yfinance" rule holds): `refresh_intraday`/`get_intraday`
+mirror `refresh_candles`/`get_candles`'s shape but with their own short staleness
+window (`INTRADAY_STALE_MINUTES`, minutes not hours) and their own period-per-interval
+map (Yahoo's real limits, verified live: `1m` → 7 days of history, `5m`/`15m` → 60
+days). Refresh is always lazy/on-demand per symbol — there's no background task
+pre-fetching an intraday universe, since day trading only cares about whatever symbol
+is actually open on the `/daytrading` page right now.
+
 **Indicators are computed on demand, not stored.** `services/indicators.py` has raw pandas
 implementations (no TA-Lib) — sma/ema/rsi/macd/bollinger/atr — and `enrich(df)` attaches the
 standard set (ema20/ema50/sma200/rsi14/macd_h/bollinger/atr14/vol20/hi20/lo20) used everywhere
@@ -93,6 +105,19 @@ signals net out; the RVOL bonus only counts when at least one rule fired), plus 
 entry/stop/target that follows the dominant `direction` (`LONG`/`SHORT`; long when there is no
 edge, so the risk calculator can always load a plan) — this is the shared building block for
 the signals page, Today's Focus, the screener's ranking, and alerts.
+
+**Day trading is a parallel indicator/signal stack, not a variant of the swing one.**
+`enrich_intraday(df, interval)` (in `indicators.py`, separate from `enrich()` since
+VWAP's session-reset grouping — by UTC date, safe because NSE/US session hours don't
+cross UTC midnight — is a different shape of computation) attaches `vwap`, `or_hi`/
+`or_lo` (opening-range high/low), `ema9`/`ema20` (fast pair vs. daily's 20/50), and
+`rsi7`. `services/intraday_signals.py` (`analyse`) mirrors `signals.py`'s conviction-
+score shape exactly but with intraday rules (VWAP reclaim/reject, opening-range
+breakout/breakdown, EMA9/20 cross) and its own tighter ATR stop/target multiples
+(`INTRADAY_STOP_ATR`/`INTRADAY_TARGET_ATR`, 1×/2× vs. daily's 1.5×/3×). Index symbols
+report zero intraday volume from Yahoo, so `vwap` comes back `null` and volume-gated
+rules never fire for them — expected, not a bug. No backtester for this yet (would need
+session-aware handling — forced end-of-day exits, no overnight holds).
 
 **Backtester** (`services/backtest.py`) is vectorized numpy over `enrich()`'d candles, long-only,
 six built-in strategies (`emax`, `rsi`, `macd`, `signal`, `rsi2`, `donchian`) selected by string,
