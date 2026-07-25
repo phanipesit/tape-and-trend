@@ -5,8 +5,8 @@ from ..db import q
 router = APIRouter(prefix="/api", tags=["quotes"])
 
 @router.get("/symbols")
-def symbols(market: str | None = None):
-    return all_symbols(market)
+def symbols(market: str | None = None, include_index: bool = False):
+    return all_symbols(market, include_index)
 
 @router.get("/quote/{symbol}")
 def one(symbol: str):

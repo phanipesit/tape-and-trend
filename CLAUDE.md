@@ -120,6 +120,20 @@ as ordinary `symbols` rows with `is_index=true`, cached through the exact same
 `refresh_candles`/`get_candles` path as any stock, but excluded from `all_symbols()` by
 default (pass `include_index=True` to see them) so they never show up in stock-picker
 dropdowns. Persists summaries to `rotation_runs`, read back by the `/rotation` page.
+`^NSEBANK` (Bank Nifty) is seeded the same way for the Options page's index underlyings —
+that page is the one exception that passes `include_index=True`, since Nifty/Bank Nifty are
+the most-traded index options on NSE, unlike every other picker (watchlist, portfolio, alerts,
+backtest) where an index row would be meaningless clutter.
+
+**AI analysis** (`services/ai_analysis.py`): Claude (`claude-opus-4-8`) when `ANTHROPIC_API_KEY`
+is set, otherwise — and on any Claude failure — a rule-based Markdown narrative; either way the
+response shape is `{source, analysis, ...}` so the frontend doesn't care which path ran. Two
+entry points share a `_run(ctx, system, task)` helper: `analyze(symbol)` (the Charts page's
+plain stock read) and `analyze_options(symbol, strategy, legs, ...)` (the Options page's
+strategy-aware read, adding a "Strategy fit" section that compares the strategy's stated bias
+against the underlying's mechanical signals). Both must treat `direction` defaulting to `LONG`
+with an empty `mechanical_signals` as "no signal fired," never as a real bullish read — see the
+`SYSTEM_OPTIONS` prompt and `_rule_based`'s strategy branch for why.
 
 **Alerts**: `services/alerts_check.check_all()` polls all rows in `alerts` against live
 price/RSI and marks `triggered_at`/`triggered_value` when a condition fires; it's called both

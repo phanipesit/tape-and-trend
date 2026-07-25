@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
+import Md from "../../components/Markdown";
 import { api, fmt } from "../../lib/api";
 
 const r5 = (x) => Math.round(x / 5) * 5;
@@ -38,10 +39,12 @@ export default function Options() {
   const [spot, setSpot] = useState(null);
   const [strat, setStrat] = useState("longcall");
   const [legs, setLegs] = useState(null);
+  const [ai, setAi] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
 
-  useEffect(() => { api("/api/symbols").then(setSyms).catch(() => {}); }, []);
+  useEffect(() => { api("/api/symbols?include_index=true").then(setSyms).catch(() => {}); }, []);
   useEffect(() => {
-    setSpot(null); setLegs(null);
+    setSpot(null); setLegs(null); setAi(null);
     api(`/api/quote/${sym}`).then((q) => setSpot(q.price)).catch(() => {});
   }, [sym]);
   useEffect(() => { if (spot && !legs) setLegs(STRATS[strat].mk(spot)); }, [spot, strat, legs]);
@@ -67,17 +70,40 @@ export default function Options() {
   }, [spot, legs]);
   const R = compute();
 
+  const runAi = () => {
+    if (!spot || !legs || !R) return;
+    setAiBusy(true); setAi(null);
+    const netPremium = -legs.reduce((s, L) => s + L.qty * L.prem, 0);
+    api("/api/ai/analyze-options", { method: "POST", body: {
+      symbol: sym, strategy_name: STRATS[strat].n, strategy_desc: STRATS[strat].d,
+      legs: legs.map((L) => ({ type: L.type, strike: L.k, qty: L.qty, premium: L.prem })),
+      net_premium: netPremium,
+      max_profit: R.maxP > spot * 0.5 ? "Unlimited ↑" : fmt(R.maxP),
+      max_loss: R.maxL < -spot * 0.5 ? "Large ↓" : fmt(R.maxL),
+      breakevens: R.bes,
+    } })
+      .then(setAi)
+      .catch((e) => setAi({ error: String(e.message || e) }))
+      .finally(() => setAiBusy(false));
+  };
+
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-bold">Options strategy lab</h1>
       <p className="text-mut text-sm">Expiry payoff for preset strategies. Premiums are rough placeholders — type in real option-chain quotes from your broker before judging any trade.</p>
       <div className="flex gap-3 flex-wrap items-center text-xs">
         <select value={sym} onChange={(e) => setSym(e.target.value)}>
-          {syms.map((s) => <option key={s.symbol}>{s.symbol}</option>)}</select>
-        <select value={strat} onChange={(e) => { setStrat(e.target.value); setLegs(spot ? STRATS[e.target.value].mk(spot) : null); }}>
+          <optgroup label="Indices">
+            {syms.filter((s) => s.symbol.startsWith("^")).map((s) =>
+              <option key={s.symbol} value={s.symbol}>{s.name}</option>)}</optgroup>
+          <optgroup label="Stocks">
+            {syms.filter((s) => !s.symbol.startsWith("^")).map((s) =>
+              <option key={s.symbol} value={s.symbol}>{s.symbol}</option>)}</optgroup>
+        </select>
+        <select value={strat} onChange={(e) => { setStrat(e.target.value); setLegs(spot ? STRATS[e.target.value].mk(spot) : null); setAi(null); }}>
           {Object.entries(STRATS).map(([k, v]) => <option key={k} value={k}>{v.n}</option>)}</select>
         <span className="text-mut font-mono">spot {spot ? fmt(spot) : "…"}</span>
-        <button className="ghost" onClick={() => setLegs(spot ? STRATS[strat].mk(spot) : null)}>Reset legs</button>
+        <button className="ghost" onClick={() => { setLegs(spot ? STRATS[strat].mk(spot) : null); setAi(null); }}>Reset legs</button>
       </div>
       {R && legs && (
         <div className="grid lg:grid-cols-3 gap-4">
@@ -118,6 +144,23 @@ export default function Options() {
                 <td className="text-right font-mono">{fmt(-legs.reduce((s, L) => s + L.qty * L.prem, 0))}</td></tr>
             </tbody></table>
           </div>
+        </div>)}
+      {R && legs && (
+        <div className="card text-sm">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="font-semibold">✨ AI strategy analysis</h3>
+            <button className="btn !py-1.5" onClick={runAi} disabled={aiBusy}>
+              {aiBusy ? "Analysing…" : ai ? "↻ Re-analyse" : `Analyse this ${STRATS[strat].n.toLowerCase()}`}</button>
+          </div>
+          {!ai && !aiBusy && <p className="text-dim">Reads {sym}'s trend/signals alongside this strategy's legs and break-evens — does the setup make sense given the current technical picture?</p>}
+          {aiBusy && <p className="text-dim">Reading candles, signals and the strategy's legs…</p>}
+          {ai?.error && <p className="text-down">Analysis failed — is the backend running? {ai.error}</p>}
+          {ai?.analysis && (<>
+            <p className="text-[10px] text-dim uppercase tracking-wide mb-1">
+              {ai.source === "claude" ? `Powered by Claude (${ai.model})` : "Rule-based analysis — add ANTHROPIC_API_KEY in backend/.env for Claude"}
+              {ai.note ? ` · ${ai.note}` : ""}</p>
+            <Md text={ai.analysis} />
+          </>)}
         </div>)}
       <p className="text-dim text-xs">Per-share payoff at expiry, ignoring lot sizes, margin, and time value before expiry. Options carry substantial risk — educational tool, not investment advice.</p>
     </div>

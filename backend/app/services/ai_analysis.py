@@ -32,6 +32,36 @@ If a field is null, say the data isn't available rather than guessing. Reference
 signals and say whether you agree with them and why. Keep it under 350 words, plain language, \
 no hype. End with a one-line reminder that this is educational analysis, not investment advice."""
 
+SYSTEM_OPTIONS = """You are the analysis engine inside Tape & Trend, an educational trading workbench \
+covering Indian (NSE/BSE) and US equities and indices. You are given a JSON snapshot of one \
+underlying (daily OHLC history summary, technical indicators, the app's mechanical swing signals \
+with an ATR-based trade plan, cached fundamentals, recent headlines) plus a specific options \
+strategy the user is considering on it (legs, net premium, max profit/loss, break-even prices).
+
+Write a clear, honest read in Markdown for a retail options trader. Structure it exactly as:
+
+## Trend
+## Momentum & volume
+## Key levels
+## Strategy fit
+## Fundamentals
+## What could go wrong
+## Bottom line
+
+Rules: ground every claim in the supplied data — never invent prices, events, fundamentals, or \
+implied volatility (none is supplied; the strategy's premiums are illustrative placeholders, not \
+live option-chain quotes — say so explicitly if you discuss premium richness/cheapness). If a \
+field is null, say the data isn't available rather than guessing. In "Strategy fit", state the \
+strategy's directional/volatility bias plainly and compare it against the underlying's mechanical \
+signals and trend — does the current technical read support this trade, conflict with it, or is \
+it a volatility/range play where trend direction barely matters? Note that "direction" in the \
+supplied data defaults to LONG whenever no rule has actually fired (score 0.0, empty \
+mechanical_signals) — that default is a data-plumbing placeholder, not a bullish signal, so never \
+describe it as supporting a bullish trade unless mechanical_signals is non-empty. Comment on \
+whether the break-even(s) sit inside or outside the current 20-day range / ATR-based plan. Keep it under 400 \
+words, plain language, no hype. End with a one-line reminder that premiums shown are placeholders \
+and this is educational analysis, not investment advice."""
+
 
 def _pct(cur: float, past: float) -> float | None:
     return round((cur / past - 1) * 100, 1) if past else None
@@ -72,7 +102,7 @@ def _context(symbol: str) -> dict:
     }
 
 
-def _claude(ctx: dict) -> str:
+def _claude(ctx: dict, system: str = SYSTEM, task: str = "stock") -> str:
     import anthropic  # lazy: the fallback path must work even if the package is absent
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=90.0, max_retries=1)
@@ -80,9 +110,9 @@ def _claude(ctx: dict) -> str:
         model=CLAUDE_MODEL,
         max_tokens=16000,
         thinking={"type": "adaptive"},
-        system=SYSTEM,
+        system=system,
         messages=[{"role": "user", "content":
-                   f"Analyse this stock:\n\n```json\n{json.dumps(ctx, indent=1)}\n```"}],
+                   f"Analyse this {task}:\n\n```json\n{json.dumps(ctx, indent=1)}\n```"}],
     )
     if response.stop_reason == "refusal":
         raise RuntimeError("Claude declined to analyse this request")
@@ -120,6 +150,36 @@ def _rule_based(ctx: dict) -> str:
                  f"entry {ctx['trade_plan']['entry']:.2f}, stop {ctx['trade_plan']['stop']:.2f}, "
                  f"target {ctx['trade_plan']['target']:.2f}.")
 
+    if ctx.get("strategy"):
+        st = ctx["strategy"]
+        lines.append("\n## Strategy fit")
+        lines.append(f"**{st['name']}** — {st['desc']}")
+        leg_txt = "; ".join(f"{'long' if L['qty'] > 0 else 'short'} {L['type']} {L['strike']:g} "
+                            f"(prem {L['premium']:.2f}, qty {L['qty']:+g})" for L in st["legs"])
+        lines.append(f"Legs: {leg_txt}. Net premium {st['net_premium']:.2f}, "
+                     f"max profit {st['max_profit']}, max loss {st['max_loss']}, "
+                     f"break-even(s) {', '.join(f'{b:.2f}' for b in st['breakevens']) or 'none in range'}.")
+        directional = "bullish" in st["desc"].lower() or "bearish" in st["desc"].lower()
+        if not directional:
+            lines.append("This is a volatility/range strategy — the mechanical trend direction "
+                         "matters less here than whether price actually moves (or stays still) enough.")
+        elif not ctx["mechanical_signals"]:
+            lines.append("No mechanical signal is currently active (score 0.0) — this strategy's "
+                         "directional bet isn't backed by a triggered rule either way right now.")
+        else:
+            agree = (("bullish" in st["desc"].lower() and ctx["direction"] == "LONG")
+                    or ("bearish" in st["desc"].lower() and ctx["direction"] == "SHORT"))
+            lines.append(f"The mechanical read (**{ctx['direction']}**, score {ctx['conviction_score']:.1f}) "
+                         f"{'agrees with' if agree else 'sits against'} this strategy's stated bias.")
+        lo20, hi20 = ctx["indicators"]["low_20d"], ctx["indicators"]["high_20d"]
+        outside = [b for b in st["breakevens"] if b < lo20 or b > hi20]
+        if st["breakevens"]:
+            lines.append(f"20-day range is {lo20:.2f}–{hi20:.2f}; "
+                         + (f"break-even(s) {', '.join(f'{b:.2f}' for b in outside)} sit outside it — "
+                            "a bigger move than the recent range is needed." if outside
+                            else "break-even(s) sit inside it — a smaller, more ordinary move would do it."))
+        lines.append("*Premiums are illustrative placeholders, not live option-chain quotes.*")
+
     lines.append("\n## Fundamentals")
     fund_bits = []
     if f["pe"] is not None:
@@ -150,14 +210,29 @@ def _rule_based(ctx: dict) -> str:
     return "\n".join(lines)
 
 
-def analyze(symbol: str) -> dict:
-    ctx = _context(symbol)
-    out = {"symbol": symbol, "close": ctx["close"], "direction": ctx["direction"]}
+def _run(ctx: dict, system: str, task: str) -> dict:
+    out = {"symbol": ctx["symbol"], "close": ctx["close"], "direction": ctx["direction"]}
     if ANTHROPIC_API_KEY:
         try:
-            return {**out, "source": "claude", "model": CLAUDE_MODEL, "analysis": _claude(ctx)}
+            return {**out, "source": "claude", "model": CLAUDE_MODEL,
+                    "analysis": _claude(ctx, system, task)}
         except Exception as e:
-            log.warning("Claude analysis failed for %s, falling back to rules", symbol, exc_info=True)
+            log.warning("Claude analysis failed for %s, falling back to rules",
+                       ctx["symbol"], exc_info=True)
             return {**out, "source": "rules", "analysis": _rule_based(ctx),
                     "note": f"Claude call failed ({type(e).__name__}) — showing rule-based analysis."}
     return {**out, "source": "rules", "analysis": _rule_based(ctx)}
+
+
+def analyze(symbol: str) -> dict:
+    return _run(_context(symbol), SYSTEM, "stock")
+
+
+def analyze_options(symbol: str, strategy_name: str, strategy_desc: str, legs: list[dict],
+                    net_premium: float, max_profit: str, max_loss: str,
+                    breakevens: list[float]) -> dict:
+    ctx = _context(symbol)
+    ctx["strategy"] = {"name": strategy_name, "desc": strategy_desc, "legs": legs,
+                       "net_premium": net_premium, "max_profit": max_profit,
+                       "max_loss": max_loss, "breakevens": breakevens}
+    return _run(ctx, SYSTEM_OPTIONS, "options strategy")
