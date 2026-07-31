@@ -23,5 +23,12 @@ const TV_INDEX_MAP = { "^NSEI": "NSE:NIFTY", "^NSEBANK": "NSE:BANKNIFTY", "^GSPC
 export const tvSymbol = (s, market, exchange = "BSE") =>
   TV_INDEX_MAP[s] || (market === "IN" ? `${exchange}:${s}` : s);
 
+// Attribution line for an /api/ai/* response — the backend tries Claude, then a local
+// model via Ollama, then its own rules, and reports which one actually ran as `source`.
+export const aiCredit = (ai) =>
+  ai.source === "claude" ? `Powered by Claude (${ai.model})`
+  : ai.source === "ollama" ? `Local ${ai.model} via Ollama`
+  : "Rule-based analysis — set ANTHROPIC_API_KEY in backend/.env, or run Ollama locally, for an AI narrative";
+
 export const fmt = (n, dp = 2) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: dp, minimumFractionDigits: dp });

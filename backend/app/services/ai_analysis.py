@@ -1,4 +1,4 @@
-"""AI stock analysis: Claude API when ANTHROPIC_API_KEY is set, rule-based narrative otherwise."""
+"""AI stock analysis: Claude API, then a local model via Ollama, then a rule-based narrative."""
 import json
 import logging
 
@@ -6,11 +6,12 @@ from .data import get_candles, get_symbol
 from .indicators import enrich
 from .news import ticker_news
 from .signals import analyse
-from ..config import ANTHROPIC_API_KEY
+from ..config import (ANTHROPIC_API_KEY, OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TIMEOUT,
+                      OLLAMA_URL)
 
 log = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-opus-4-8"
+CLAUDE_MODEL = "claude-opus-5"
 
 SYSTEM = """You are the analysis engine inside Tape & Trend, an educational trading workbench \
 covering Indian (NSE/BSE) and US equities. You are given a JSON snapshot of one stock: daily \
@@ -28,9 +29,19 @@ Structure it exactly as:
 ## Bottom line
 
 Rules: ground every claim in the supplied data — never invent prices, events, or fundamentals. \
-If a field is null, say the data isn't available rather than guessing. Reference the mechanical \
-signals and say whether you agree with them and why. Keep it under 350 words, plain language, \
-no hype. End with a one-line reminder that this is educational analysis, not investment advice."""
+If a field is null, say the data isn't available rather than guessing.
+
+Do not re-derive anything already classified for you in the `derived` block: use \
+`derived.rsi_zone` rather than judging the RSI number, `derived.volume_vs_20d_average` rather \
+than judging RVOL, `derived.price_vs_sma200` and `derived.ema_stack` for trend structure, and \
+`derived.any_signal_fired` rather than inferring from the signal list. Restate those in plain \
+language instead of doing your own arithmetic.
+
+Reference the mechanical signals and say whether you agree with them and why. `signal_direction` \
+is null when no rule has fired — say there is no mechanical edge right now rather than inferring \
+one; `trade_plan.direction` falls back to LONG so the plan is always loadable and is not a view. \
+Keep it under 350 words, plain language, no hype. End with a one-line reminder that this is educational analysis, \
+not investment advice."""
 
 SYSTEM_OPTIONS = """You are the analysis engine inside Tape & Trend, an educational trading workbench \
 covering Indian (NSE/BSE) and US equities and indices. You are given a JSON snapshot of one \
@@ -48,23 +59,62 @@ Write a clear, honest read in Markdown for a retail options trader. Structure it
 ## What could go wrong
 ## Bottom line
 
-Rules: ground every claim in the supplied data — never invent prices, events, fundamentals, or \
-implied volatility (none is supplied; the strategy's premiums are illustrative placeholders, not \
-live option-chain quotes — say so explicitly if you discuss premium richness/cheapness). If a \
-field is null, say the data isn't available rather than guessing. In "Strategy fit", state the \
+Rules: ground every claim in the supplied data — never invent prices, events, or fundamentals.
+
+Do not compute or re-derive anything. The snapshot already contains the conclusions you need, \
+pre-computed: use `derived.rsi_zone` rather than judging the RSI number yourself, \
+`derived.volume_vs_20d_average` rather than judging RVOL, `derived.any_signal_fired` rather than \
+inferring from the signal list, and `strategy.breakevens_vs_range` rather than comparing the \
+break-evens against the range yourself. Restate those fields in plain language. If you ever find \
+yourself doing arithmetic, stop and quote the pre-computed field instead.
+
+The premiums are theoretical Black-Scholes values priced off the underlying's realized volatility \
+(`strategy.realized_vol_pct`) at `strategy.days_to_expiry` days — NOT live option-chain quotes and \
+NOT implied volatility. Say so if you discuss whether the premium is rich or cheap; real quotes \
+will differ, usually because implied vol differs from realized. `strategy.position_greeks` are \
+qty-weighted position totals (theta per calendar day, vega per 1 percentage point of vol).
+
+If a field is null, say the data isn't available rather than guessing. In "Strategy fit", state the \
 strategy's directional/volatility bias plainly and compare it against the underlying's mechanical \
 signals and trend — does the current technical read support this trade, conflict with it, or is \
-it a volatility/range play where trend direction barely matters? Note that "direction" in the \
-supplied data defaults to LONG whenever no rule has actually fired (score 0.0, empty \
-mechanical_signals) — that default is a data-plumbing placeholder, not a bullish signal, so never \
-describe it as supporting a bullish trade unless mechanical_signals is non-empty. Comment on \
-whether the break-even(s) sit inside or outside the current 20-day range / ATR-based plan. Keep it under 400 \
-words, plain language, no hype. End with a one-line reminder that premiums shown are placeholders \
-and this is educational analysis, not investment advice."""
+it a volatility/range play where trend direction barely matters? `signal_direction` is the ONLY \
+field that carries a mechanical view: when it is null no rule has fired, so say plainly that \
+nothing backs this trade either way, and never claim the strategy "aligns with the mechanical \
+signals". Ignore `trade_plan.direction` for this judgement — it falls back to LONG so the plan is \
+always loadable. Where the Greeks \
+are informative, use them: theta is what the position bleeds per day, vega its exposure to a \
+volatility shift. Keep it under 400 words, plain language, no hype. End with a one-line reminder \
+that premiums are model estimates rather than live quotes, and that this is educational analysis, \
+not investment advice."""
 
 
 def _pct(cur: float, past: float) -> float | None:
     return round((cur / past - 1) * 100, 1) if past else None
+
+
+# Small models reliably misread raw indicator values — llama3 called RSI 48.8 "oversold",
+# RVOL 1.02 "relatively high", and a break-even inside the 20-day range "outside" it, then
+# built a risk conclusion on that. So classify here and hand the model conclusions to
+# narrate rather than numbers to derive. Shared with _rule_based so the two can't drift.
+def _rsi_zone(rsi: float) -> str:
+    return "oversold" if rsi < 32 else "overbought" if rsi > 72 else "neutral"
+
+
+def _rvol_note(rvol: float) -> str:
+    return ("unusually heavy" if rvol >= 1.5 else
+            "above average" if rvol >= 1.15 else
+            "below average" if rvol <= 0.85 else "about average")
+
+
+def _range_note(values: list[float], lo: float, hi: float) -> str | None:
+    """Whether each value sits inside or outside the [lo, hi] band."""
+    if not values:
+        return None
+    outside = [v for v in values if v < lo or v > hi]
+    if not outside:
+        return f"all inside the 20-day range {lo:.2f}-{hi:.2f}"
+    return (f"{', '.join(f'{v:.2f}' for v in outside)} outside the 20-day range "
+            f"{lo:.2f}-{hi:.2f} (a bigger move than recent action is needed)")
 
 
 def _context(symbol: str) -> dict:
@@ -93,13 +143,35 @@ def _context(symbol: str) -> dict:
             "high_20d": round(float(last.hi20), 2), "low_20d": round(float(last.lo20), 2),
         },
         "trend": a["trend"], "mechanical_signals": a["signals"],
-        "conviction_score": a["score"], "direction": a["direction"],
-        "trade_plan": {"entry": round(a["entry"], 2), "stop": round(a["stop"], 2),
-                       "target": round(a["target"], 2)},
+        "conviction_score": a["score"],
+        # NOT a["direction"]. signals.analyse() defaults direction to LONG when nothing has
+        # fired, so the risk calculator can always load a plan — that default is plumbing,
+        # not a bullish read. Shipping it as a real field made the narrative describe flat
+        # tape as "aligned with the mechanical signals". null is the honest value; the
+        # default still travels with the plan below, where it means something.
+        "signal_direction": a["direction"] if a["signals"] else None,
+        # Pre-classified so the narrative can't invert them (see _rsi_zone comment).
+        "derived": {
+            "rsi_zone": _rsi_zone(a["rsi"]),
+            "volume_vs_20d_average": _rvol_note(a["rvol"]),
+            "price_vs_sma200": (None if last.sma200 != last.sma200 else
+                                "above" if a["close"] > float(last.sma200) else "below"),
+            "ema_stack": "bullish (20>50)" if a["ema20"] > a["ema50"] else "bearish (20<50)",
+            "any_signal_fired": bool(a["signals"]),
+        },
+        "trade_plan": {"direction": a["direction"], "entry": round(a["entry"], 2),
+                       "stop": round(a["stop"], 2), "target": round(a["target"], 2),
+                       "note": ("ATR-based levels. Direction falls back to LONG when no rule "
+                                "has fired, so the plan is always loadable — check "
+                                "signal_direction before reading it as a view.")},
         "fundamentals": {k: (float(meta[k]) if meta.get(k) is not None else None)
                          for k in ("pe", "roe", "de", "rev_growth", "div_yield", "mcap")},
         "recent_headlines": news,
     }
+
+
+def _user_msg(ctx: dict, task: str) -> str:
+    return f"Analyse this {task}:\n\n```json\n{json.dumps(ctx, indent=1)}\n```"
 
 
 def _claude(ctx: dict, system: str = SYSTEM, task: str = "stock") -> str:
@@ -111,14 +183,38 @@ def _claude(ctx: dict, system: str = SYSTEM, task: str = "stock") -> str:
         max_tokens=16000,
         thinking={"type": "adaptive"},
         system=system,
-        messages=[{"role": "user", "content":
-                   f"Analyse this {task}:\n\n```json\n{json.dumps(ctx, indent=1)}\n```"}],
+        messages=[{"role": "user", "content": _user_msg(ctx, task)}],
     )
     if response.stop_reason == "refusal":
         raise RuntimeError("Claude declined to analyse this request")
     text = "".join(b.text for b in response.content if b.type == "text").strip()
     if not text:
         raise RuntimeError("empty response from Claude")
+    return text
+
+
+def _ollama(ctx: dict, system: str = SYSTEM, task: str = "stock") -> str:
+    """Local model through Ollama's /api/chat. No key, no cost, but slow and much smaller
+    than Claude — the prompts are shared, so quality is the only thing that differs."""
+    import httpx  # lazy, same reason as _claude
+
+    r = httpx.post(
+        f"{OLLAMA_URL}/api/chat",
+        timeout=OLLAMA_TIMEOUT,
+        json={
+            "model": OLLAMA_MODEL,
+            "stream": False,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": _user_msg(ctx, task)}],
+            # num_ctx must be set explicitly: Ollama truncates to 4096 by default, which
+            # would silently cut the tail off our JSON snapshot.
+            "options": {"temperature": 0.3, "num_ctx": OLLAMA_NUM_CTX},
+        },
+    )
+    r.raise_for_status()
+    text = (r.json().get("message") or {}).get("content", "").strip()
+    if not text:
+        raise RuntimeError("empty response from Ollama")
     return text
 
 
@@ -136,17 +232,17 @@ def _rule_based(ctx: dict) -> str:
 
     lines.append("\n## Momentum & volume")
     rsi = i["rsi14"]
-    zone = "oversold" if rsi < 32 else "overbought" if rsi > 72 else "neutral"
+    zone = _rsi_zone(rsi)
     macd = "positive" if i["macd_hist"] > 0 else "negative"
     lines.append(f"RSI-14 is {rsi:.0f} ({zone}); the MACD histogram is {macd}. "
-                 f"Relative volume is {i['rvol']:.2f}× the 20-day average"
-                 + (" — unusual activity." if i["rvol"] >= 1.5 else "."))
+                 f"Relative volume is {i['rvol']:.2f}× the 20-day average "
+                 f"({_rvol_note(i['rvol'])}).")
 
     lines.append("\n## Key levels")
     lines.append(f"20-day range: {i['low_20d']:.2f} – {i['high_20d']:.2f}. "
                  f"Bollinger band: {i['bb_lower']:.2f} – {i['bb_upper']:.2f}. "
                  f"52-week range: {ctx['52w_low']:.2f} – {ctx['52w_high']:.2f}. "
-                 f"ATR-14 is {i['atr14']:.2f}, giving the {ctx['direction'].lower()} plan: "
+                 f"ATR-14 is {i['atr14']:.2f}, giving the {ctx['trade_plan']['direction'].lower()} plan: "
                  f"entry {ctx['trade_plan']['entry']:.2f}, stop {ctx['trade_plan']['stop']:.2f}, "
                  f"target {ctx['trade_plan']['target']:.2f}.")
 
@@ -159,26 +255,31 @@ def _rule_based(ctx: dict) -> str:
         lines.append(f"Legs: {leg_txt}. Net premium {st['net_premium']:.2f}, "
                      f"max profit {st['max_profit']}, max loss {st['max_loss']}, "
                      f"break-even(s) {', '.join(f'{b:.2f}' for b in st['breakevens']) or 'none in range'}.")
+        if st.get("realized_vol_pct") is not None:
+            lines.append(f"Priced at {st['realized_vol_pct']:.1f}% realized volatility, "
+                         f"{st.get('days_to_expiry', '?')} days to expiry.")
+        g = st.get("position_greeks")
+        if g:
+            lines.append(f"Position Greeks — delta {g['delta']:+.3f}, theta {g['theta']:+.3f}/day, "
+                         f"vega {g['vega']:+.3f} per 1% vol, gamma {g['gamma']:.4f}. "
+                         + ("Time decay works against you here."
+                            if g["theta"] < 0 else "Time decay works in your favour here."))
         directional = "bullish" in st["desc"].lower() or "bearish" in st["desc"].lower()
         if not directional:
             lines.append("This is a volatility/range strategy — the mechanical trend direction "
                          "matters less here than whether price actually moves (or stays still) enough.")
-        elif not ctx["mechanical_signals"]:
+        elif ctx["signal_direction"] is None:
             lines.append("No mechanical signal is currently active (score 0.0) — this strategy's "
                          "directional bet isn't backed by a triggered rule either way right now.")
         else:
-            agree = (("bullish" in st["desc"].lower() and ctx["direction"] == "LONG")
-                    or ("bearish" in st["desc"].lower() and ctx["direction"] == "SHORT"))
-            lines.append(f"The mechanical read (**{ctx['direction']}**, score {ctx['conviction_score']:.1f}) "
+            agree = (("bullish" in st["desc"].lower() and ctx["signal_direction"] == "LONG")
+                    or ("bearish" in st["desc"].lower() and ctx["signal_direction"] == "SHORT"))
+            lines.append(f"The mechanical read (**{ctx['signal_direction']}**, score {ctx['conviction_score']:.1f}) "
                          f"{'agrees with' if agree else 'sits against'} this strategy's stated bias.")
-        lo20, hi20 = ctx["indicators"]["low_20d"], ctx["indicators"]["high_20d"]
-        outside = [b for b in st["breakevens"] if b < lo20 or b > hi20]
-        if st["breakevens"]:
-            lines.append(f"20-day range is {lo20:.2f}–{hi20:.2f}; "
-                         + (f"break-even(s) {', '.join(f'{b:.2f}' for b in outside)} sit outside it — "
-                            "a bigger move than the recent range is needed." if outside
-                            else "break-even(s) sit inside it — a smaller, more ordinary move would do it."))
-        lines.append("*Premiums are illustrative placeholders, not live option-chain quotes.*")
+        if st.get("breakevens_vs_range"):
+            lines.append(f"Break-even(s): {st['breakevens_vs_range']}.")
+        lines.append("*Premiums are theoretical Black-Scholes values from realized volatility, "
+                     "not live option-chain quotes — real premiums will differ.*")
 
     lines.append("\n## Fundamentals")
     fund_bits = []
@@ -198,7 +299,7 @@ def _rule_based(ctx: dict) -> str:
     lines.append("\n## Mechanical signals")
     if ctx["mechanical_signals"]:
         lines += [f"- **{s['type']}** — {s['why']}" for s in ctx["mechanical_signals"]]
-        lines.append(f"Net direction **{ctx['direction']}**, conviction score {ctx['conviction_score']:.1f}.")
+        lines.append(f"Net direction **{ctx['signal_direction']}**, conviction score {ctx['conviction_score']:.1f}.")
     else:
         lines.append("No rules fired on the latest bar — no fresh setup here.")
 
@@ -206,22 +307,36 @@ def _rule_based(ctx: dict) -> str:
     lines.append(f"{ctx['symbol']} is in a {ctx['trend'].lower()}-trend with {zone} momentum"
                  + (f" and {len(ctx['mechanical_signals'])} active signal(s)." if ctx["mechanical_signals"]
                     else " and no active setup — patience over action."))
-    lines.append("\n*Rule-based summary (no AI key configured). Educational tool — not investment advice.*")
+    lines.append("\n*Rule-based summary (no AI model available). Educational tool — not investment advice.*")
     return "\n".join(lines)
 
 
-def _run(ctx: dict, system: str, task: str) -> dict:
-    out = {"symbol": ctx["symbol"], "close": ctx["close"], "direction": ctx["direction"]}
+def _providers() -> list[tuple[str, str, callable]]:
+    """(source, model, fn) for each configured AI backend, best first. Anything not
+    configured is simply absent, so `_run` degrades to the rule-based narrative."""
+    p = []
     if ANTHROPIC_API_KEY:
+        p.append(("claude", CLAUDE_MODEL, _claude))
+    if OLLAMA_MODEL:
+        p.append(("ollama", OLLAMA_MODEL, _ollama))
+    return p
+
+
+def _run(ctx: dict, system: str, task: str) -> dict:
+    # `direction` is null when no rule fired — the plan's fallback LONG is not a view.
+    out = {"symbol": ctx["symbol"], "close": ctx["close"], "direction": ctx["signal_direction"]}
+    failed = []
+    for source, model, call in _providers():
         try:
-            return {**out, "source": "claude", "model": CLAUDE_MODEL,
-                    "analysis": _claude(ctx, system, task)}
+            return {**out, "source": source, "model": model, "analysis": call(ctx, system, task)}
         except Exception as e:
-            log.warning("Claude analysis failed for %s, falling back to rules",
-                       ctx["symbol"], exc_info=True)
-            return {**out, "source": "rules", "analysis": _rule_based(ctx),
-                    "note": f"Claude call failed ({type(e).__name__}) — showing rule-based analysis."}
-    return {**out, "source": "rules", "analysis": _rule_based(ctx)}
+            log.warning("%s analysis failed for %s, trying next provider",
+                        source, ctx["symbol"], exc_info=True)
+            failed.append(f"{source} ({type(e).__name__})")
+    res = {**out, "source": "rules", "analysis": _rule_based(ctx)}
+    if failed:
+        res["note"] = f"{', '.join(failed)} failed — showing rule-based analysis."
+    return res
 
 
 def analyze(symbol: str) -> dict:
@@ -230,9 +345,15 @@ def analyze(symbol: str) -> dict:
 
 def analyze_options(symbol: str, strategy_name: str, strategy_desc: str, legs: list[dict],
                     net_premium: float, max_profit: str, max_loss: str,
-                    breakevens: list[float]) -> dict:
+                    breakevens: list[float], days_to_expiry: int | None = None,
+                    vol_pct: float | None = None, greeks: dict | None = None) -> dict:
     ctx = _context(symbol)
+    i = ctx["indicators"]
     ctx["strategy"] = {"name": strategy_name, "desc": strategy_desc, "legs": legs,
                        "net_premium": net_premium, "max_profit": max_profit,
-                       "max_loss": max_loss, "breakevens": breakevens}
+                       "max_loss": max_loss, "breakevens": breakevens,
+                       "days_to_expiry": days_to_expiry,
+                       "realized_vol_pct": vol_pct, "position_greeks": greeks,
+                       # Pre-computed: the model kept getting this comparison backwards.
+                       "breakevens_vs_range": _range_note(breakevens, i["low_20d"], i["high_20d"])}
     return _run(ctx, SYSTEM_OPTIONS, "options strategy")

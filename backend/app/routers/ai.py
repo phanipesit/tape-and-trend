@@ -26,12 +26,16 @@ class OptionsReq(BaseModel):
     max_profit: str    # pre-formatted, matching what the UI shows (e.g. "Unlimited ↑" or a number)
     max_loss: str
     breakevens: list[float]
+    days_to_expiry: int | None = None
+    vol_pct: float | None = None          # realized vol the premiums were priced off
+    greeks: dict[str, float] | None = None   # position-level, qty-weighted
 
 @router.post("/ai/analyze-options")
 def ai_analyze_options(req: OptionsReq):
     try:
         return analyze_options(req.symbol.upper(), req.strategy_name, req.strategy_desc,
                                [L.model_dump() for L in req.legs], req.net_premium,
-                               req.max_profit, req.max_loss, req.breakevens)
+                               req.max_profit, req.max_loss, req.breakevens,
+                               req.days_to_expiry, req.vol_pct, req.greeks)
     except ValueError as e:
         raise HTTPException(404, str(e))

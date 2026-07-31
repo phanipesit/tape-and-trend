@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import TVChart from "../../components/TVChart";
 import Md from "../../components/Markdown";
-import { api, fmt } from "../../lib/api";
+import { api, aiCredit, fmt } from "../../lib/api";
 
 function ChartsInner() {
   const sp = useSearchParams();
@@ -81,7 +81,7 @@ function ChartsInner() {
         {ai?.error && <p className="text-down">Analysis failed — is the backend running? {ai.error}</p>}
         {ai?.analysis && (<>
           <p className="text-[10px] text-dim uppercase tracking-wide mb-1">
-            {ai.source === "claude" ? `Powered by Claude (${ai.model})` : "Rule-based analysis — add ANTHROPIC_API_KEY in backend/.env for Claude"}
+            {aiCredit(ai)}
             {ai.note ? ` · ${ai.note}` : ""}</p>
           <Md text={ai.analysis} />
         </>)}
