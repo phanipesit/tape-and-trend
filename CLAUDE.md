@@ -18,13 +18,20 @@ psql -d tapetrend -f db/schema.sql                        # base tables + seed s
 psql -d tapetrend -f db/migration_002.sql                 # AI-stocks universe (see Known inconsistency)
 psql -d tapetrend -f db/migration_003_nifty_universe.sql  # NIFTY 50 + NEXT 50 universe
 psql -d tapetrend -f db/migration_004_alerts_table.sql    # alerts table
+psql -d tapetrend -f db/migration_005_paper_trades.sql    # journal columns + paper-trade flag
+psql -d tapetrend -f db/migration_006_signal_outcomes.sql # signal_outcomes table
+psql -d tapetrend -f db/migration_007_rotation.sql        # rotation_runs + ^NSEI/^GSPC index rows
+psql -d tapetrend -f db/migration_008_niftybank.sql       # ^NSEBANK index row
+psql -d tapetrend -f db/migration_009_intraday.sql        # intraday_ohlcv table
 ```
+Run every migration in order — skipping any leaves tables that feature code reads at
+request time missing. `main.py`'s startup check logs an error naming each absent table.
 
 **Backend** (FastAPI, port 8000, from `backend/`):
 ```bash
 python -m venv .venv && .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload   # not bare `uvicorn` — Device Guard blocks pip's unsigned .exe shims
 ```
 Interactive API docs at http://localhost:8000/docs. Config comes from `backend/.env`
 (`DATABASE_URL`, `TWELVEDATA_KEY`, `NEWSAPI_KEY`, `CORS_ORIGINS`), templated by `.env.example`.
@@ -33,9 +40,15 @@ Interactive API docs at http://localhost:8000/docs. Config comes from `backend/.
 ```bash
 npm install
 npm run dev      # dev server
-npm run build    # production build
+npm run build    # production build — NOT while `npm run dev` is running (see below)
 npm run start    # serve production build
 ```
+**Never run `npm run build` while the dev server is up.** Next.js uses the same `.next`
+directory for both, so a production build overwrites the artifacts the running dev server
+is serving and every route starts returning 500 — including routes you didn't touch, which
+makes it look like a code fault rather than an artifact clash. Recovery: stop the dev
+server, `rm -rf .next`, restart it. To type-check frontend changes without disturbing a
+running dev server, stop it first or build from a separate checkout.
 
 **Both at once**: `start.bat` (Windows) launches backend + frontend in separate windows and
 opens the browser — paths inside it are hardcoded to this checkout's location.
@@ -150,9 +163,38 @@ that page is the one exception that passes `include_index=True`, since Nifty/Ban
 the most-traded index options on NSE, unlike every other picker (watchlist, portfolio, alerts,
 backtest) where an index row would be meaningless clutter.
 
-**AI analysis** (`services/ai_analysis.py`): Claude (`claude-opus-4-8`) when `ANTHROPIC_API_KEY`
-is set, otherwise — and on any Claude failure — a rule-based Markdown narrative; either way the
-response shape is `{source, analysis, ...}` so the frontend doesn't care which path ran. Two
+**Options pricing** (`services/options.py`) is Black-Scholes with **realized** volatility standing in
+for implied — there's no option-chain feed, so `realized_vol()` annualises the stdev of 60 days of
+log returns from the same cached candles everything else uses (clamped to `MIN_VOL`/`MAX_VOL` so a
+flat history can't produce absurd premiums). Before this, the frontend hardcoded premiums as fixed
+percentages of spot (a long call was always 3% of spot), so time to expiry wasn't modelled at all
+and every break-even, max-profit and max-loss level was arbitrary — a 7-day OTM NIFTY leg priced at
+364 where the model says 0.05. Those levels are what the AI analysis reasons over, hence the fix.
+`black_scholes()` degenerates to intrinsic value at `t<=0` or `vol<=0` (Greeks zeroed rather than
+dividing by zero); `price_strategy()` returns per-leg premium+Greeks plus qty-weighted position
+totals, so a short leg flips delta/theta signs the way the real position would. Theta is per
+calendar day and vega per 1 percentage point of vol, matching how traders quote them. Premiums stay
+editable on the frontend — the model is a starting point, not a quote.
+
+**AI analysis** (`services/ai_analysis.py`): a provider chain, not a single backend. `_providers()`
+lists the configured ones best-first — Claude (`claude-opus-4-8`) when `ANTHROPIC_API_KEY` is set,
+then a local model through Ollama (`OLLAMA_MODEL`, default `llama3`, via `/api/chat`) — and `_run`
+walks it, falling through to the next on any exception and finally to a rule-based Markdown
+narrative. Adding a provider means appending to `_providers()`, nothing else. Every path returns
+the same `{source, analysis, ...}` shape so the frontend doesn't care which one ran; it renders
+attribution via `lib/api.js`'s `aiCredit()`, the single place that maps `source` to a label. The
+Ollama call must set `options.num_ctx` explicitly — Ollama truncates to 4096 by default, which
+would silently cut the tail off the JSON snapshot.
+
+**Hand the model conclusions, not numbers to derive.** Small local models reliably misread raw
+indicator values — llama3 called RSI 48.8 "oversold", RVOL 1.02 "relatively high", and a break-even
+*inside* the 20-day range "outside" it, then built a risk conclusion on that inversion. So
+`_context()` attaches a `derived` block (`rsi_zone`, `volume_vs_20d_average`, `price_vs_sma200`,
+`ema_stack`, `any_signal_fired`) and `analyze_options` adds `breakevens_vs_range`, all pre-computed
+by the same `_rsi_zone`/`_rvol_note`/`_range_note` helpers `_rule_based` uses so the two paths can't
+drift. Both system prompts instruct the model to restate those fields rather than do arithmetic.
+That eliminated all five factual errors in the options narrative. Keep this in mind when adding
+fields: anything requiring a comparison or threshold judgement belongs in `derived`, not raw. Two
 entry points share a `_run(ctx, system, task)` helper: `analyze(symbol)` (the Charts page's
 plain stock read) and `analyze_options(symbol, strategy, legs, ...)` (the Options page's
 strategy-aware read, adding a "Strategy fit" section that compares the strategy's stated bias
@@ -191,6 +233,7 @@ describes a *different* migration (journal/risk/alerts schema changes) as "migra
 `db/` currently contains `migration_002.sql` (AI universe), `migration_003_nifty_universe.sql`,
 `migration_004_alerts_table.sql`, `migration_005_paper_trades.sql` (also adds the setup/notes
 journal columns the phantom "migration_002" was supposed to create), and
-`migration_006_signal_outcomes.sql` — so the next free number is `migration_007`. If you're
-adding a new migration file, check what's actually in `db/` rather than trusting either
-document's numbering.
+`migration_006_signal_outcomes.sql`, `migration_007_rotation.sql`,
+`migration_008_niftybank.sql`, and `migration_009_intraday.sql` — so the next free number is
+`migration_010`. If you're adding a new migration file, check what's actually in `db/` rather
+than trusting either document's numbering, this line included.
