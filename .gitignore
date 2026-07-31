@@ -5,3 +5,4 @@ __pycache__/
 .env
 .venv/
 venv/
+backend/tools/nse_captures/   # raw NSE payloads: large, timestamped, regenerable
