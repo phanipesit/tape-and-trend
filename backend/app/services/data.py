@@ -59,14 +59,28 @@ def get_symbol(symbol: str) -> dict:
     return rows[0]
 
 def all_symbols(market: str | None = None, include_index: bool = False) -> list[dict]:
-    conds, params = [], {}
-    if not include_index:
-        conds.append("is_index = false")
+    # Filter on asset_class, not is_index. migration_010 added display-only rows
+    # (world indices, metals, WTI/DXY/VIX) that are deliberately is_index=false so
+    # they stay out of the options-underlying picker and out of get_index_symbol()'s
+    # regime lookup — but that means an is_index filter alone would have leaked gold
+    # futures into every *stock* picker instead. asset_class carries the distinction.
+    classes = "'equity','index'" if include_index else "'equity'"
+    conds, params = [f"asset_class IN ({classes})"], {}
     if market in ("IN", "US"):
         conds.append("market = :m")
         params["m"] = market
-    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    where = "WHERE " + " AND ".join(conds)
     return q(f"SELECT * FROM symbols {where} ORDER BY market, symbol", **params)
+
+
+def market_context(asset_classes: tuple[str, ...] = ("index", "global", "metal", "macro")) -> list[dict]:
+    """Display-only rows for the dashboard's global board — never stock pickers.
+    Only rows with a region set appear; ^NSEBANK is an options underlying, not a
+    headline gauge, so it is deliberately region-NULL and excluded."""
+    classes = ",".join(f"'{c}'" for c in asset_classes)
+    return q(f"""SELECT symbol, name, market, asset_class, region FROM symbols
+                 WHERE asset_class IN ({classes}) AND region IS NOT NULL
+                 ORDER BY region, symbol""")
 
 def get_index_symbol(market: str) -> str:
     rows = q("SELECT symbol FROM symbols WHERE market=:m AND is_index=true LIMIT 1", m=market)

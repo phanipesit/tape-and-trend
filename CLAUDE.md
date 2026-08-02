@@ -23,6 +23,7 @@ psql -d tapetrend -f db/migration_006_signal_outcomes.sql # signal_outcomes tabl
 psql -d tapetrend -f db/migration_007_rotation.sql        # rotation_runs + ^NSEI/^GSPC index rows
 psql -d tapetrend -f db/migration_008_niftybank.sql       # ^NSEBANK index row
 psql -d tapetrend -f db/migration_009_intraday.sql        # intraday_ohlcv table
+psql -d tapetrend -f db/migration_010_global_markets.sql # asset_class/region + world indices, metals, macro
 ```
 Run every migration in order — skipping any leaves tables that feature code reads at
 request time missing. `main.py`'s startup check logs an error naming each absent table.
@@ -163,6 +164,36 @@ that page is the one exception that passes `include_index=True`, since Nifty/Ban
 the most-traded index options on NSE, unlike every other picker (watchlist, portfolio, alerts,
 backtest) where an index row would be meaningless clutter.
 
+**Global market board** (`services/markets.py` + `services/market_hours.py`) powers the
+dashboard's top section. `market_hours.py` is pure — venue sessions over `zoneinfo`, no DB
+or network, `now` injectable — so it is fully unit-testable. Everything is rendered in
+**both** venue-local and home time (`config.HOME_TZ`, default `Asia/Kolkata`): an India-based
+user wants "NYSE opens 19:00 IST", not an offset to compute. Times come from concrete
+datetimes rather than fixed offsets, so DST is tracked (the US open is 19:00 IST in summer,
+20:00 in winter — there's a test pinning both). Two modelling notes: COMEX metals sessions
+start **Sunday** 18:00 ET and wrap past midnight to 17:00 ET next day, so `Venue.days`
+carries which weekdays *start* a session and a segment with `end <= start` means it wraps —
+treating futures as weekday-only put the Sunday reopen a full day late. And there is
+**deliberately no holiday calendar**: every response carries `holidays_applied=false` and the
+UI says so, because a silently holiday-blind clock would be trusted and wrong.
+
+`markets.py` reads **cached candles only** (`auto=False`) — same precondition as `sectors.py`
+and `rotation.py`; 18 sequential yfinance fetches on a dashboard render is exactly the
+multi-minute stall `routers/screener.py` warns about. `refresh_board()` is the explicit
+opt-in path behind the ↻ button. `_trend()` synthesises the one-line read (regime from the
+share of indices above their 200DMA, VIX bucketed <20 calm / <30 elevated / else stressed,
+gold-silver ratio) so the frontend renders rather than computes.
+
+**`asset_class`, not `is_index`, is what keeps these out of pickers** (migration_010).
+`is_index` means "tradeable options underlying" — `get_index_symbol()` uses it for the
+rotation regime filter and the Options page shows exactly those three. The board's world
+indices, metals and macro rows are `is_index=false` with `asset_class` in
+`global`/`metal`/`macro`, and `all_symbols()` filters on `asset_class` — otherwise gold
+futures would have appeared in every stock dropdown. Foreign venues use `market='GLOBAL'`
+(the CHECK constraint was widened); `yf_symbol()` only special-cases `'IN'`, so anything
+else passes the ticker through unchanged, which is what Yahoo wants for `^FTSE`/`^N225`/
+`000001.SS`.
+
 **Options pricing** (`services/options.py`) is Black-Scholes with **realized** volatility standing in
 for implied — there's no option-chain feed, so `realized_vol()` annualises the stdev of 60 days of
 log returns from the same cached candles everything else uses (clamped to `MIN_VOL`/`MAX_VOL` so a
@@ -234,6 +265,7 @@ describes a *different* migration (journal/risk/alerts schema changes) as "migra
 `migration_004_alerts_table.sql`, `migration_005_paper_trades.sql` (also adds the setup/notes
 journal columns the phantom "migration_002" was supposed to create), and
 `migration_006_signal_outcomes.sql`, `migration_007_rotation.sql`,
-`migration_008_niftybank.sql`, and `migration_009_intraday.sql` — so the next free number is
-`migration_010`. If you're adding a new migration file, check what's actually in `db/` rather
-than trusting either document's numbering, this line included.
+`migration_008_niftybank.sql`, `migration_009_intraday.sql`, and
+`migration_010_global_markets.sql` — so the next free number is `migration_011`. If you're
+adding a new migration file, check what's actually in `db/` rather than trusting either
+document's numbering, this line included.
