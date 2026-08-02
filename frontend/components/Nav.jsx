@@ -7,6 +7,7 @@ import { api, fmt } from "../lib/api";
 const ITEMS = [
   ["/", "Dashboard"], ["/charts", "Charts"], ["/signals", "Swing signals"],
   ["/edge", "Your edge"],
+  ["/heatmap", "Heatmap"],
   ["/screener", "Screener"], ["/sectors", "Sectors"], ["/options", "Options lab"],
   ["/daytrading", "Day trading"],
   ["/backtest", "Backtest"], ["/rotation", "Rotation"], ["/runs", "Runs"],

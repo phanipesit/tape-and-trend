@@ -233,6 +233,31 @@ against the underlying's mechanical signals). Both must treat `direction` defaul
 with an empty `mechanical_signals` as "no signal fired," never as a real bullish read — see the
 `SYSTEM_OPTIONS` prompt and `_rule_based`'s strategy branch for why.
 
+**Market heatmap** (`services/heatmap.py` + `frontend/lib/treemap.js`) is the treemap view of
+the equity universe — tile area is activity, colour is the day's move. It reads cached candles
+only, like `sectors.py`/`rotation.py`/`markets.py`, and pulls the last two bars for every symbol
+in **one** windowed query rather than per-symbol reads.
+
+**Every weight is a share, never a raw value.** `symbols.mcap` and turnover are denominated in
+each listing's own currency: Reliance's market cap reads 17.3T (₹) against NVIDIA's 5.0T ($),
+so raw sizing would draw Reliance ~3× NVIDIA's tile when it is roughly a twenty-fifth of it.
+`_shares()` normalises against the row's **own market's** total, which is what makes an
+IN+US board meaningful at all. Consequence to keep in mind: unfiltered, each market fills half
+the canvas; inside a filter the split shows what fraction of each market's activity that theme
+is (AI is ~55% of US turnover, ~2.6% of India's) — that's a real reading, not a bug.
+
+Buckets reuse `sectors.py`'s `sector_group()` (the 51 seeded labels folded into ~16 groups) —
+don't add a second mapping. The **AI theme is orthogonal to it**: `is_ai()` matches `ai` as a
+standalone regex token plus the `Semiconductors`/`Technology` sectors (chipmakers and
+hyperscalers never say "AI" in their label). The token boundary is load-bearing — a substring
+match also tags Ret**ai**l, **Ai**rlines and P**ai**nts, all three of which are in the seeded
+Indian universe; there are tests pinning exactly that.
+
+`lib/treemap.js` implements squarified layout (Bruls/Huizing/van Wijk) rather than using
+Recharts' `<Treemap>`, which owns its own label rendering — tiles here need four lines plus a
+click target, so they have to be ordinary DOM. Squarified rather than slice-and-dice because
+slivers can't be labelled or clicked.
+
 **News wire** (`services/news.py`) blends two sources with incompatible timestamp shapes —
 yfinance per-ticker stories (epoch seconds on the legacy field, a Zulu ISO string on the new
 one) and NewsAPI business headlines (ISO with an offset) — so `_iso()` normalises everything
