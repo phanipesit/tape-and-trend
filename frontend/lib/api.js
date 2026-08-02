@@ -30,5 +30,19 @@ export const aiCredit = (ai) =>
   : ai.source === "ollama" ? `Local ${ai.model} via Ollama`
   : "Rule-based analysis — set ANTHROPIC_API_KEY in backend/.env, or run Ollama locally, for an AI narrative";
 
+// "3h ago" from an ISO-8601 UTC string — services/news.py normalises every source
+// (epoch seconds, Zulu, offset strings) to that one shape so this can stay dumb.
+export const ago = (iso) => {
+  if (!iso) return "—";
+  const secs = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (Number.isNaN(secs)) return "—";
+  if (secs < 60) return "just now";
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+};
+
 export const fmt = (n, dp = 2) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: dp, minimumFractionDigits: dp });

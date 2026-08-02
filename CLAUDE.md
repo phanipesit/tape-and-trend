@@ -233,6 +233,27 @@ against the underlying's mechanical signals). Both must treat `direction` defaul
 with an empty `mechanical_signals` as "no signal fired," never as a real bullish read — see the
 `SYSTEM_OPTIONS` prompt and `_rule_based`'s strategy branch for why.
 
+**News wire** (`services/news.py`) blends two sources with incompatible timestamp shapes —
+yfinance per-ticker stories (epoch seconds on the legacy field, a Zulu ISO string on the new
+one) and NewsAPI business headlines (ISO with an offset) — so `_iso()` normalises everything
+to one UTC ISO-8601 string. That's not cosmetic: `order()` sorts the blended feed
+lexicographically on that string, so a source left un-normalised would silently sort wrong.
+Naive timestamps are assumed UTC rather than passed to `astimezone()`, which would read them
+as the server's local time. `order()` also dedupes by lower-cased title (the same story
+reaches us from both a ticker feed and a headline feed) and sorts undated items last.
+`wire()` owns the blending — the router is a one-liner — and keeps the blocking calls
+(`ticker_news` behind `YF_LOCK`, `q()`) in `asyncio.to_thread` so they never run on the event
+loop. The dashboard renders it via `components/NewsWire.jsx` (5-min poll, not the 1-min the
+price panels use — headlines move slower and each poll costs ~4 upstream fetches); `/news` is
+the full-page view. With no `NEWSAPI_KEY` set the feed degenerates to watchlist ticker news
+only, which is a working state, not an error.
+
+**The dashboard has no watchlist table** — the news wire took that column. Two capabilities
+rode along with it and were rehomed rather than dropped: adding a ticker that isn't in the
+universe yet (`POST /api/symbols`, still the only entry point anywhere) is now a compact strip
+at the bottom of `app/page.jsx`, and un-watching is now the ★/☆ button on `/screener`, which
+became a DELETE/POST toggle instead of add-only.
+
 **Alerts**: `services/alerts_check.check_all()` polls all rows in `alerts` against live
 price/RSI and marks `triggered_at`/`triggered_value` when a condition fires; it's called both
 by the startup background loop in `main.py` (every 5 min) and synchronously via

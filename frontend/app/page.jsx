@@ -2,10 +2,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import GlobalMarkets from "../components/GlobalMarkets";
+import NewsWire from "../components/NewsWire";
 import { api, fmt } from "../lib/api";
 
 export default function Dashboard() {
-  const [watch, setWatch] = useState([]);
   const [sigs, setSigs] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [err, setErr] = useState("");
@@ -13,8 +13,8 @@ export default function Dashboard() {
   const [adding, setAdding] = useState(false);
 
   const load = () => {
-    api("/api/watchlist").then(setWatch).catch((e) => setErr(String(e)));
-    api("/api/signals").then((r) => setSigs(r.sort((a, b) => b.score - a.score))).catch(() => {});
+    api("/api/signals").then((r) => { setSigs(r.sort((a, b) => b.score - a.score)); setErr(""); })
+      .catch((e) => setErr(String(e)));
     api("/api/alerts").then((r) => setAlerts(r.filter((a) => a.triggered_at))).catch(() => {});
   };
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, []);
@@ -30,13 +30,12 @@ export default function Dashboard() {
     } catch (e) { alert(String(e.message || e)); }
     finally { setAdding(false); }
   };
-  const unwatch = (s) => api(`/api/watchlist/${s}`, { method: "DELETE" }).then(load);
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-bold">Market overview</h1>
-        <p className="text-mut text-sm">Watchlist quotes refresh every minute from the cached EOD/latest bar.</p>
+        <p className="text-mut text-sm">Global board and setups refresh every minute from the cached EOD/latest bar.</p>
       </div>
       {err && <div className="card border-down text-down text-sm">Backend unreachable — is uvicorn running on :8000? {err}</div>}
       <GlobalMarkets />
@@ -47,29 +46,7 @@ export default function Dashboard() {
           {" — "}<Link href="/alerts" className="text-brass underline">manage</Link>
         </div>)}
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="card">
-          <h2 className="font-semibold mb-2">Watchlist</h2>
-          <table className="w-full"><thead><tr><th>SYMBOL</th><th>LAST</th><th>CHG%</th><th></th></tr></thead>
-            <tbody>{watch.map((q) => (
-              <tr key={q.symbol}>
-                <td><Link className="font-bold hover:text-brass" href={`/charts?symbol=${q.symbol}`}>{q.symbol}</Link></td>
-                <td>{fmt(q.price)}{q.stale && (
-                  <span className="text-brass text-[10px] ml-1 cursor-help"
-                    title={`Live refresh failed — showing cached bar from ${q.date || "an earlier session"}`}>⚠ stale</span>)}</td>
-                <td className={q.pct >= 0 ? "text-up" : "text-down"}>{q.pct >= 0 ? "+" : ""}{fmt(q.pct)}%</td>
-                <td><button className="ghost !px-2 !py-0.5" title="Remove from watchlist" onClick={() => unwatch(q.symbol)}>✕</button></td>
-              </tr>))}</tbody>
-          </table>
-          <div className="flex gap-2 items-center mt-3 pt-3 border-t border-line text-xs">
-            <input className="w-32" placeholder="Add ticker e.g. ZOMATO" value={add.symbol}
-              onChange={(e) => setAdd({ ...add, symbol: e.target.value.toUpperCase() })}
-              onKeyDown={(e) => e.key === "Enter" && addStock()} />
-            <select value={add.market} onChange={(e) => setAdd({ ...add, market: e.target.value })}>
-              <option value="IN">India</option><option value="US">US</option></select>
-            <button className="btn !py-1.5" onClick={addStock} disabled={adding}>{adding ? "Adding…" : "+ Add stock"}</button>
-          </div>
-          <p className="text-dim text-[11px] mt-2">Any NSE/BSE or US ticker — validated against Yahoo, then charts, signals, screener and backtests all work on it automatically.</p>
-        </div>
+        <NewsWire />
         <div className="card">
           <h2 className="font-semibold mb-2">Today's focus <span className="text-dim text-xs font-normal">top 3 by conviction score</span></h2>
           {sigs.length === 0 && <p className="text-dim text-sm">No rules triggered on the latest bar.</p>}
@@ -94,6 +71,19 @@ export default function Dashboard() {
             </div>))}
           {sigs.length > 3 && <Link href="/signals" className="ghost inline-block mt-2">All {sigs.length} setups →</Link>}
         </div>
+      </div>
+      {/* The only entry point in the app for a ticker that isn't in the universe yet
+          — it rode along with the watchlist card, so it stays behind after it. */}
+      <div className="card flex flex-wrap gap-2 items-center text-xs">
+        <span className="text-mut">Track a new ticker:</span>
+        <input className="w-36" placeholder="e.g. ZOMATO" value={add.symbol}
+          onChange={(e) => setAdd({ ...add, symbol: e.target.value.toUpperCase() })}
+          onKeyDown={(e) => e.key === "Enter" && addStock()} />
+        <select value={add.market} onChange={(e) => setAdd({ ...add, market: e.target.value })}>
+          <option value="IN">India</option><option value="US">US</option></select>
+        <button className="btn !py-1.5" onClick={addStock} disabled={adding}>{adding ? "Adding…" : "+ Add stock"}</button>
+        <span className="text-dim">Validated against Yahoo, then charts, signals, screener and backtests all work on it.</span>
+        <Link href="/screener" className="text-brass hover:underline ml-auto">Manage watchlist in the screener →</Link>
       </div>
       <p className="text-dim text-xs">Educational tool — not investment advice. Signals are mechanical rules; verify everything before trading.</p>
     </div>

@@ -27,8 +27,14 @@ export default function Screener() {
   useEffect(() => () => clearInterval(pollRef.current), []);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
 
-  const addToWatchlist = (symbol) =>
-    api(`/api/watchlist/${symbol}`, { method: "POST" }).then(() => setWatched((w) => new Set(w).add(symbol)));
+  // Toggle, not add-only: the dashboard's watchlist table used to be the one place
+  // you could un-watch something, and the news wire replaced it.
+  const toggleWatchlist = (symbol) => {
+    const on = watched.has(symbol);
+    return api(`/api/watchlist/${symbol}`, { method: on ? "DELETE" : "POST" }).then(() => {
+      setWatched((w) => { const n = new Set(w); on ? n.delete(symbol) : n.add(symbol); return n; });
+    });
+  };
 
   const refreshAll = () => {
     api("/api/fundamentals/refresh-all", { method: "POST" }).then((s) => {
@@ -83,8 +89,8 @@ export default function Screener() {
               <td className={r.trend === "UP" ? "text-up" : "text-down"}>{r.trend}</td>
               <td className="text-brass">{fmt(r.score, 1)}</td>
               <td className="flex gap-1 text-xs">
-                <button className="ghost !px-2 !py-0.5" title={watched.has(r.symbol) ? "Already on watchlist" : "Add to watchlist"}
-                  disabled={watched.has(r.symbol)} onClick={() => addToWatchlist(r.symbol)}>
+                <button className="ghost !px-2 !py-0.5" title={watched.has(r.symbol) ? "Remove from watchlist" : "Add to watchlist"}
+                  onClick={() => toggleWatchlist(r.symbol)}>
                   {watched.has(r.symbol) ? "★" : "☆"}</button>
                 <Link className="ghost !px-2 !py-0.5" title="Set an alert" href={`/alerts?symbol=${r.symbol}`}>🔔</Link>
                 <Link className="ghost !px-2 !py-0.5" title="Backtest this" href={`/backtest?symbol=${r.symbol}`}>📊</Link>
