@@ -248,8 +248,10 @@ is (AI is ~55% of US turnover, ~2.6% of India's) — that's a real reading, not 
 
 Buckets reuse `sectors.py`'s `sector_group()` (the 51 seeded labels folded into ~16 groups) —
 don't add a second mapping. The **AI theme is orthogonal to it**: `is_ai()` matches `ai` as a
-standalone regex token plus the `Semiconductors`/`Technology` sectors (chipmakers and
-hyperscalers never say "AI" in their label). The token boundary is load-bearing — a substring
+standalone regex token, plus `Semiconductors` (the chipmakers never say "AI" in their label but
+are the trade). Plain `Technology` is deliberately excluded — that bucket is AAPL/MSFT/GOOGL/
+META, and four of the largest listings on earth would dominate every tile, making the AI filter
+a megacap-tech filter wearing an AI label. The token boundary is load-bearing — a substring
 match also tags Ret**ai**l, **Ai**rlines and P**ai**nts, all three of which are in the seeded
 Indian universe; there are tests pinning exactly that.
 

@@ -135,8 +135,9 @@ export default function Heatmap() {
         <div className="flex flex-wrap gap-1.5">
           <button className={tabCls(bucket === "ALL")} onClick={() => setBucket("ALL")}>
             ALL <span className="text-dim">{board?.rows.length ?? ""}</span></button>
-          <button className={tabCls(bucket === "AI")} onClick={() => setBucket("AI")}>
-            AI &amp; TECH <span className="text-dim">{board?.ai_count ?? ""}</span></button>
+          <button className={tabCls(bucket === "AI")} onClick={() => setBucket("AI")}
+            title="Explicit AI labels plus semiconductors. Excludes plain 'Technology' — the hyperscalers would dominate every tile.">
+            AI <span className="text-dim">{board?.ai_count ?? ""}</span></button>
           {board?.groups.map((g) => (
             <button key={g.group} className={tabCls(bucket === g.group)} onClick={() => setBucket(g.group)}>
               {g.group.toUpperCase()} <span className="text-dim">{g.n}</span></button>))}

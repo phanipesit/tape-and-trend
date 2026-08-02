@@ -15,10 +15,16 @@ def test_ai_labels_are_tagged(sector):
     assert heatmap.is_ai(sector)
 
 
-@pytest.mark.parametrize("sector", ["Semiconductors", "Technology"])
-def test_ai_trade_sectors_are_tagged(sector):
-    # The chipmakers and hyperscalers never say "AI" in their label but are the trade.
-    assert heatmap.is_ai(sector)
+def test_semiconductors_are_tagged():
+    # The chipmakers never say "AI" in their label but are the trade.
+    assert heatmap.is_ai("Semiconductors")
+
+
+def test_plain_technology_is_not_tagged():
+    # AAPL/MSFT/GOOGL/META sit here. Including them would turn the AI filter into a
+    # megacap-tech filter — four of the largest listings on earth would dominate
+    # every tile regardless of how much AI exposure they actually carry.
+    assert not heatmap.is_ai("Technology")
 
 
 @pytest.mark.parametrize("sector", ["Retail", "Airlines", "Consumer/Paints"])
@@ -93,11 +99,12 @@ def test_board_uses_the_latest_bar_for_turnover(wired):
     assert by_symbol(heatmap.board())["AAPL"]["turnover"] == 1100.0  # 110 x 10
 
 
-def test_board_tags_ai_without_catching_retail(wired):
+def test_board_tags_ai_without_catching_retail_or_megacap_tech(wired):
     r = by_symbol(heatmap.board())
-    assert r["NVDA"]["ai"] and r["AAPL"]["ai"]
-    assert not r["TRENT"]["ai"]
-    assert heatmap.board()["ai_count"] == 2
+    assert r["NVDA"]["ai"]
+    assert not r["AAPL"]["ai"]   # plain "Technology" — a hyperscaler, not the AI trade
+    assert not r["TRENT"]["ai"]  # Ret-ai-l
+    assert heatmap.board()["ai_count"] == 1
 
 
 def test_board_reports_symbols_with_no_cached_candles(wired):

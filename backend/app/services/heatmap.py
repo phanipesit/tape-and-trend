@@ -26,9 +26,11 @@ from .sectors import sector_group
 # in the seeded Indian universe.
 _AI_TOKEN = re.compile(r"(?:^|[^a-z])ai(?:$|[^a-z])")
 
-# Sectors that are the AI trade even though their label never says "AI" — the
-# chipmakers selling into it and the hyperscalers whose capex funds it.
-_AI_SECTORS = {"semiconductors", "technology"}
+# The one sector that is the AI trade even though its label never says "AI": the
+# chipmakers selling into it. Deliberately *not* "technology" — that bucket is the
+# hyperscalers (AAPL, MSFT, GOOGL, META), and folding four of the largest listings
+# on earth into the AI filter makes it a megacap-tech filter wearing an AI label.
+_AI_SECTORS = {"semiconductors"}
 
 
 def is_ai(raw_sector: str | None) -> bool:
