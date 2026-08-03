@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
-import TVChart from "../../components/TVChart";
+import Link from "next/link";
+import IntradayChart from "../../components/IntradayChart";
 import { api, fmt } from "../../lib/api";
 
-const INTERVALS = { "1m": "1", "5m": "5", "15m": "15" };   // our label -> TradingView's format
+const INTERVALS = ["1m", "5m", "15m"];
 
 export default function DayTrading() {
   const [syms, setSyms] = useState([]);
@@ -22,8 +23,6 @@ export default function DayTrading() {
     return () => clearInterval(t);
   }, [symbol, interval]);
 
-  const market = syms.find((s) => s.symbol === symbol)?.market || "IN";
-
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
@@ -37,15 +36,17 @@ export default function DayTrading() {
               <option key={s.symbol} value={s.symbol}>{s.symbol} · {s.market}</option>)}</optgroup>
         </select>
         <select value={interval} onChange={(e) => setIntervalStr(e.target.value)}>
-          {Object.keys(INTERVALS).map((iv) => <option key={iv} value={iv}>{iv} bars</option>)}
+          {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv} bars</option>)}
         </select>
       </div>
       <p className="text-mut text-sm">
         VWAP, opening-range breakout and fast EMA/RSI — tools for intraday moves, not the
         swing-timeframe indicators used elsewhere in this app. Refreshes every 60s while
-        this page is open.
+        this page is open. The chart is drawn from our own cached bars, so it shows exactly
+        what the signals below are computed from — for a full TradingView chart, see{" "}
+        <Link href={`/charts?symbol=${symbol}`} className="text-brass hover:underline">Charts</Link>.
       </p>
-      <TVChart symbol={symbol} market={market} interval={INTERVALS[interval]} exchange="NSE" />
+      <IntradayChart symbol={symbol} interval={interval} />
 
       {err && <div className="card border-down text-down text-sm">Backend unreachable — is uvicorn running on :8000? {err}</div>}
       {a?.error && <div className="card text-down text-sm">{a.error}</div>}
