@@ -1,8 +1,5 @@
 """Capture NSE's live option chain to raw JSON files, for building a parser against.
 
-Run during market hours (Mon-Fri 09:15-15:30 IST) — outside them NSE returns HTTP 200
-with an empty body, which is what we got probing on a Saturday.
-
     python tools/capture_nse_chain.py
 
 Writes timestamped raw payloads to backend/tools/nse_captures/. Deliberately does NOT
@@ -14,6 +11,13 @@ Notes on NSE's undocumented API, learned the hard way:
   - A browser User-Agent and Referer are required or you get 403.
   - /api/option-chain-indices (the path in most tutorials) is DEAD — returns 404.
     The live path is /api/option-chain-v3?type=Indices|Equities&symbol=...
+  - **v3 requires an `expiry` parameter.** Without it the response is HTTP 200 with a
+    2-byte body, `{}`. This was originally misread as "the market is closed" after a
+    weekend probe; re-running it at 09:34 on an open Monday returned the same `{}`,
+    which is what disproved that. Fetch /api/option-chain-contract-info?symbol=<SYM>
+    first — it returns `expiryDates` — then pass the nearest one to v3.
+  - The client is not bot-blocked: /api/allIndices returns 113KB on the same session
+    that gets `{}` from a v3 call missing its expiry. Don't chase a WAF that isn't there.
 """
 import json
 import sys
@@ -25,11 +29,9 @@ import httpx
 
 OUT = Path(__file__).parent / "nse_captures"
 WARMUP = "https://www.nseindia.com/option-chain"
-TARGETS = [
-    ("NIFTY", "https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=NIFTY"),
-    ("BANKNIFTY", "https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=BANKNIFTY"),
-    ("RELIANCE", "https://www.nseindia.com/api/option-chain-v3?type=Equities&symbol=RELIANCE"),
-]
+BASE = "https://www.nseindia.com/api"
+# (symbol, v3 `type`) — the type must match or the chain comes back empty.
+TARGETS = [("NIFTY", "Indices"), ("BANKNIFTY", "Indices"), ("RELIANCE", "Equities")]
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
@@ -71,10 +73,18 @@ def main() -> int:
             print("  !! warm-up failed — every /api/ call will 403. Aborting.")
             return 1
 
-        for name, url in TARGETS:
+        for name, kind in TARGETS:
             time.sleep(1.0)   # be a polite client; NSE rate-limits hard
             try:
-                r = c.get(url)
+                # Step 1: the expiry list. v3 will not serve a chain without one.
+                ci = c.get(f"{BASE}/option-chain-contract-info?symbol={name}")
+                expiries = ci.json().get("expiryDates") or [] if ci.status_code == 200 else []
+                if not expiries:
+                    print(f"{name:<10} no expiryDates (HTTP {ci.status_code}) — cannot build a v3 URL")
+                    continue
+                expiry = expiries[0]   # nearest — the one an intraday trader cares about
+                time.sleep(1.0)
+                r = c.get(f"{BASE}/option-chain-v3?type={kind}&symbol={name}&expiry={expiry}")
             except Exception as e:
                 print(f"{name:<10} ERROR {type(e).__name__}: {e}")
                 continue
@@ -82,8 +92,10 @@ def main() -> int:
                 print(f"{name:<10} HTTP {r.status_code} — not captured")
                 continue
             if len(r.content) < 100:
-                print(f"{name:<10} HTTP 200 but {len(r.content)}b (empty — market closed?)")
+                print(f"{name:<10} HTTP 200 but {len(r.content)}b — expiry={expiry} rejected, "
+                      f"or the symbol/type pair is wrong")
                 continue
+            print(f"{name:<10} expiry {expiry} ({len(expiries)} available)")
 
             path = OUT / f"{name}-{stamp}.json"
             path.write_bytes(r.content)
