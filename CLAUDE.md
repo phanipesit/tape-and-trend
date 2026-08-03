@@ -103,6 +103,17 @@ separately (`refresh_fundamentals`, on-demand via `/api/fundamentals/{symbol}/re
 is part of the key because 1m/5m/15m bars for the same symbol land on overlapping
 timestamps) rather than date-grained. Still fetched through `services/data.py` (the
 "only place that talks to yfinance" rule holds): `refresh_intraday`/`get_intraday`
+**`BSE_OVERRIDE` is a daily-only workaround and must never reach the intraday path.**
+`yf_symbol()` takes an `intraday=True` flag that forces `.NS`. Yahoo serves no current
+intraday for `.BO` at all — a 5m request for `HDFCBANK.BO` returns "possibly delisted, no
+price data" — but routing intraday through BSE doesn't *error*: the 60-day request still
+returns old bars, so `refresh_intraday` reports a healthy row count while the newest bar
+never advances. HDFCBANK sat on the previous Friday's bars for a whole live session while
+`/daytrading` scored and displayed them as current. Hence also `analyse()`'s `stale` /
+`bar_age_minutes` / `venue_open` fields: a bar older than 3× the interval **while the venue
+is open** is a dead feed and the page says so in red. While the venue is shut it is just the
+weekend — same distinction the daily quote path already makes.
+
 mirror `refresh_candles`/`get_candles`'s shape but with their own short staleness
 window (`INTRADAY_STALE_MINUTES`, minutes not hours) and their own period-per-interval
 map (Yahoo's real limits, verified live: `1m` → 7 days of history, `5m`/`15m` → 60

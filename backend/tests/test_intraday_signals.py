@@ -96,3 +96,48 @@ def test_index_like_zero_volume_gives_no_vwap_and_no_volume_signals():
     assert res["vwap"] is None
     assert "vwap_reclaim" not in tags(res)
     assert res["rvol"] == 1.0   # falls back cleanly instead of dividing by zero
+
+
+# ---------------------------------------------------------------- staleness
+
+def last_ts(df):
+    return df["ts"].iloc[-1].to_pydatetime()
+
+
+def test_fresh_bar_during_an_open_session_is_not_stale():
+    df = make_intraday([100.0 + i * 0.1 for i in range(40)])
+    res = analyse_df(df, "X", now=last_ts(df) + timedelta(minutes=4), venue_open=True)
+    assert res["stale"] is False
+    assert res["bar_age_minutes"] == 4.0
+
+
+def test_old_bar_during_an_open_session_is_stale():
+    # Three missed 5m bars while the venue is open means the feed is dead, which is
+    # exactly how HDFCBANK served Friday's bars as if they were live.
+    df = make_intraday([100.0 + i * 0.1 for i in range(40)])
+    res = analyse_df(df, "X", now=last_ts(df) + timedelta(minutes=20), venue_open=True)
+    assert res["stale"] is True
+
+
+def test_old_bar_while_the_venue_is_shut_is_not_stale():
+    # The weekend guard: Friday's close on a Sunday is not a dead feed.
+    df = make_intraday([100.0 + i * 0.1 for i in range(40)])
+    res = analyse_df(df, "X", now=last_ts(df) + timedelta(days=2), venue_open=False)
+    assert res["stale"] is False
+    assert res["bar_age_minutes"] > 2000
+
+
+def test_unknown_venue_state_never_claims_stale_but_still_reports_age():
+    df = make_intraday([100.0 + i * 0.1 for i in range(40)])
+    res = analyse_df(df, "X", now=last_ts(df) + timedelta(minutes=99), venue_open=None)
+    assert res["stale"] is False
+    assert res["bar_age_minutes"] == 99.0
+
+
+def test_stale_threshold_scales_with_the_interval():
+    df = make_intraday([100.0 + i * 0.1 for i in range(40)], interval_minutes=15)
+    fresh = analyse_df(df, "X", interval="15m", now=last_ts(df) + timedelta(minutes=40),
+                       venue_open=True)
+    dead = analyse_df(df, "X", interval="15m", now=last_ts(df) + timedelta(minutes=50),
+                      venue_open=True)
+    assert fresh["stale"] is False and dead["stale"] is True

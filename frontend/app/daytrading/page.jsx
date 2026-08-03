@@ -49,10 +49,22 @@ export default function DayTrading() {
 
       {err && <div className="card border-down text-down text-sm">Backend unreachable — is uvicorn running on :8000? {err}</div>}
       {a?.error && <div className="card text-down text-sm">{a.error}</div>}
+      {/* A dead feed used to be invisible here: the last good bar kept being scored and
+          rendered as if live. Never hide this behind a subtle tint. */}
+      {a?.stale && (
+        <div className="card border-down text-down text-sm">
+          ⚠ Stale feed — the last bar is {fmt(a.bar_age_minutes, 0)} minutes old while the
+          market is open. Everything below is computed from that bar and is <b>not</b> a
+          live read. Check the data feed for {a.symbol} before acting on it.
+        </div>)}
       {a && !a.error && (
         <div className="grid md:grid-cols-3 gap-4">
           <div className="card text-sm">
-            <h3 className="font-semibold mb-2">Intraday levels</h3>
+            <h3 className="font-semibold mb-2">Intraday levels{" "}
+              <span className="text-dim text-xs font-normal font-mono">
+                {a.bar_age_minutes == null ? "" :
+                  `last bar ${fmt(a.bar_age_minutes, 0)}m ago`}
+                {a.venue_open === false && " · market shut"}</span></h3>
             <table className="w-full"><tbody>
               <tr><td className="text-mut">VWAP</td><td className="text-right">{a.vwap == null ? "— (no volume data)" : fmt(a.vwap)}</td></tr>
               <tr><td className="text-mut">Opening range high</td><td className="text-right">{fmt(a.or_hi)}</td></tr>

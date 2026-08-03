@@ -45,11 +45,21 @@ def usd_inr_rate() -> float:
                     "cached rate" if _fx_cache["rate"] else "hardcoded fallback", exc_info=True)
     return _fx_cache["rate"] or USD_INR_FALLBACK
 
-def yf_symbol(symbol: str, market: str) -> str:
+def yf_symbol(symbol: str, market: str, intraday: bool = False) -> str:
     if symbol.startswith("^"):   # index ticker (e.g. ^NSEI, ^GSPC) — already the exact Yahoo symbol
         return symbol
     if market == "IN":
-        return f"{symbol}.BO" if symbol in BSE_OVERRIDE else f"{symbol}.NS"
+        # BSE_OVERRIDE is a *daily*-data workaround and must not reach the intraday
+        # path: Yahoo serves no current intraday for .BO at all. A 1d/5m request for
+        # HDFCBANK.BO comes back "possibly delisted; no price data found" with zero
+        # bars, while HDFCBANK.NS has the live session. Routing intraday through .BO
+        # doesn't error — the 60d request still returns old bars, so refresh_intraday
+        # reports a healthy row count while the newest bar never advances past the
+        # last day BSE happened to serve. That is how HDFCBANK sat on Friday's bars
+        # while the day-trading page showed its signal as live.
+        if intraday or symbol not in BSE_OVERRIDE:
+            return f"{symbol}.NS"
+        return f"{symbol}.BO"
     return symbol
 
 def get_symbol(symbol: str) -> dict:
@@ -165,7 +175,7 @@ def refresh_intraday(symbol: str, interval: str = "5m") -> int:
     if interval not in _INTRADAY_PERIOD:
         raise ValueError(f"unsupported intraday interval {interval}")
     meta = get_symbol(symbol)
-    ysym = yf_symbol(symbol, meta["market"])
+    ysym = yf_symbol(symbol, meta["market"], intraday=True)
     df = yf_download(ysym, period=_INTRADAY_PERIOD[interval], interval=interval, auto_adjust=True)
     _intraday_last_fetch[(symbol, interval)] = datetime.now(timezone.utc)
     if df.empty:

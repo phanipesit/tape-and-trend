@@ -6,8 +6,13 @@ Note: index symbols (^NSEI, ^NSEBANK, ^GSPC) report zero intraday volume from Ya
 so VWAP is undefined (NaN) and volume-gated rules never fire for them — expected, not
 a bug, and handled naturally by the same NaN-safe comparisons signals.py already relies on.
 """
-from .data import get_intraday
+from datetime import datetime, timezone
+
+import pandas as pd
+
+from .data import get_intraday, get_symbol
 from .indicators import enrich_intraday
+from .market_hours import venue_for, venue_state
 from .signals import BREAKOUT_RVOL
 
 INTRADAY_RSI_OVERSOLD = 20    # rsi7 is far more volatile than daily rsi14, hence the wider extremes
@@ -15,10 +20,42 @@ INTRADAY_RSI_OVERBOUGHT = 80
 INTRADAY_STOP_ATR = 1.0       # tighter than daily's 1.5x/3x — intraday moves are smaller in absolute terms
 INTRADAY_TARGET_ATR = 2.0
 
-def analyse(symbol: str, interval: str = "5m") -> dict:
-    return analyse_df(get_intraday(symbol, interval), symbol, interval)
+_INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15}
+# A live feed should produce a bar every `interval`. Three missed in a row, during an
+# open session, means the feed is dead rather than quiet.
+STALE_BAR_MULTIPLE = 3
 
-def analyse_df(df, symbol: str = "", interval: str = "5m") -> dict:
+
+def _bar_age_minutes(ts, now: datetime) -> float | None:
+    """Minutes between the last bar and `now`. None if the timestamp is unusable."""
+    t = pd.Timestamp(ts)
+    if pd.isna(t):
+        return None
+    t = t.tz_localize(timezone.utc) if t.tzinfo is None else t.tz_convert(timezone.utc)
+    return (now - t.to_pydatetime()).total_seconds() / 60.0
+
+
+def analyse(symbol: str, interval: str = "5m") -> dict:
+    """Rule evaluation plus a staleness verdict, which needs the venue's session."""
+    open_now = None
+    try:
+        venue = venue_for(symbol) or venue_for_market(symbol)
+        open_now = venue_state(venue)["state"] == "OPEN" if venue else None
+    except Exception:
+        pass   # a missing venue must never stop the analysis; it just leaves stale unknown
+    return analyse_df(get_intraday(symbol, interval), symbol, interval, venue_open=open_now)
+
+
+def venue_for_market(symbol: str) -> str | None:
+    """Fallback when venue_for() has no mapping for a plain equity ticker."""
+    try:
+        return {"IN": "NSE", "US": "NYSE"}.get(get_symbol(symbol)["market"])
+    except Exception:
+        return None
+
+
+def analyse_df(df, symbol: str = "", interval: str = "5m", now: datetime | None = None,
+               venue_open: bool | None = None) -> dict:
     """Pure rule evaluation over raw intraday candles (ts,o,h,l,c,v) — no I/O, testable."""
     if len(df) < 30:
         return {"symbol": symbol, "signals": [], "error": "not enough intraday history"}
@@ -51,8 +88,17 @@ def analyse_df(df, symbol: str = "", interval: str = "5m") -> dict:
     direction = "SHORT" if sell_pts > buy_pts else "LONG"
     stop = i.c + INTRADAY_STOP_ATR * a if direction == "SHORT" else i.c - INTRADAY_STOP_ATR * a
     target = i.c - INTRADAY_TARGET_ATR * a if direction == "SHORT" else i.c + INTRADAY_TARGET_ATR * a
+    # Staleness is only meaningful while the venue is open — a Friday bar on a Sunday
+    # is the weekend, not a dead feed, the same distinction the daily quote path makes.
+    # Reported even when we can't judge it, so callers can apply their own rule.
+    age = _bar_age_minutes(i.ts, now or datetime.now(timezone.utc))
+    limit = STALE_BAR_MULTIPLE * _INTERVAL_MINUTES.get(interval, 5)
+    stale = bool(venue_open and age is not None and age > limit)
+
     return {
         "symbol": symbol, "interval": interval, "close": float(i.c), "ts": str(i.ts),
+        "bar_age_minutes": None if age is None else round(age, 1),
+        "stale": stale, "venue_open": venue_open,
         "vwap": round(float(i.vwap), 4) if i.vwap == i.vwap else None,   # NaN check
         "or_hi": float(i.or_hi), "or_lo": float(i.or_lo),
         "ema9": float(i.ema9), "ema20": float(i.ema20), "rsi7": round(float(i.rsi7), 1),
