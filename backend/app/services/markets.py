@@ -57,7 +57,13 @@ def _row(meta: dict) -> dict | None:
 
 
 def _trend(indices: list[dict], metals: list[dict], macro: list[dict]) -> dict:
-    """One-line read of the global tape, computed rather than left to the frontend."""
+    """One-line read of the global tape, computed rather than left to the frontend.
+
+    Note the rows may not share an as-of date — the board reads cache only, so an
+    unrefreshed symbol sits on an older close. The regime is a breadth count over
+    200-day averages, which barely moves in a day, so a mixed board still reads
+    correctly; `as_of_mixed` on the response is what tells the UI to caveat it.
+    """
     scored = [r for r in indices if r["above_sma200"] is not None]
     above = sum(r["above_sma200"] for r in scored)
     up = sum(1 for r in indices if r["pct"] > 0)
@@ -126,12 +132,28 @@ def board() -> dict:
     regions = [{"region": g, "rows": sorted(by_region[g], key=lambda r: r["symbol"])}
                for g in REGION_ORDER if g in by_region]
 
+    # Rows do not share an as-of date. The board never fetches (auto=False), so a symbol
+    # only advances when the ↻ button runs or some other page happens to refresh it with
+    # auto=True — the signals and day-trading pages do that for ^NSEI/^NSEBANK. Reporting
+    # max() as *the* board date therefore claimed "close of <today>" while most of the
+    # board was days behind. Report the spread and let the UI say so.
+    dates = sorted({r["as_of"] for r in rows})
+    newest = dates[-1] if dates else None
+    for r in rows:
+        r["is_behind"] = r["as_of"] != newest
+    behind = sum(r["is_behind"] for r in rows)
+
     return {
         "regions": regions,
         "metals": sorted(metals, key=lambda r: r["symbol"]),
         "macro": sorted(macro, key=lambda r: r["symbol"]),
         "trend": _trend(indices, metals, macro),
-        "as_of": max((r["as_of"] for r in rows), default=None),
+        # Only a single shared date can honestly be called "the" board date.
+        "as_of": newest if len(dates) == 1 else None,
+        "as_of_oldest": dates[0] if dates else None,
+        "as_of_newest": newest,
+        "as_of_mixed": len(dates) > 1,
+        "rows_behind": behind, "rows_total": len(rows),
         "missing": missing,
     }
 

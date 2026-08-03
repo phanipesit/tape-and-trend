@@ -28,8 +28,12 @@ function countdown(secs) {
 
 function Row({ r }) {
   return (
-    <tr>
-      <td className="font-mono">{r.symbol.replace(/^\^/, "")}</td>
+    <tr className={r.is_behind ? "opacity-60" : ""}>
+      <td className="font-mono">{r.symbol.replace(/^\^/, "")}
+        {r.is_behind && (
+          <span className="text-brass ml-1 cursor-help"
+                title={`Cached at ${r.as_of}, older than the rest of the board — hit ↻`}>·</span>)}
+      </td>
       <td className="text-mut truncate max-w-[9rem]" title={r.name}>{r.name}</td>
       <td className="text-right font-mono">{fmt(r.last)}</td>
       <td className={`text-right font-mono ${pctCls(r.pct)}`}>{sign(r.pct)}{fmt(r.pct)}%</td>
@@ -79,8 +83,16 @@ export default function GlobalMarkets() {
           <span className={`text-xs font-mono border rounded-full px-2.5 py-1 ${REGIME_STYLE[t.regime]}`}>
             {t.regime}</span>
           <span className="text-sm">{t.verdict}.</span>
+          {/* The board reads cache only, so rows can sit on different closes. Showing
+              max(as_of) as "the" date claimed the whole board was current when most of
+              it wasn't — say mixed, and how many. */}
           <span className="text-dim text-xs font-mono ml-auto">
-            close of {board.as_of}
+            {board.as_of_mixed ? (
+              <span className="text-brass"
+                    title="Rows are cached at different dates. ↻ refreshes them all.">
+                ⚠ mixed: {board.rows_behind}/{board.rows_total} still on {board.as_of_oldest},
+                newest {board.as_of_newest}</span>
+            ) : <>close of {board.as_of}</>}
             <button className="ghost !py-0.5 !px-2 ml-2" onClick={refresh} disabled={busy}>
               {busy ? "refreshing…" : "↻"}</button>
           </span>
