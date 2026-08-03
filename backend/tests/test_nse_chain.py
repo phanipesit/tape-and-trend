@@ -76,7 +76,7 @@ def chain(monkeypatch):
         row(FAR, 24500, "CE", 18.0),
         row(NEAR, 23000, "CE", None),        # unquoted — must be skipped, not used as 0
     ]
-    monkeypatch.setattr(nse_chain, "get_chain", lambda s, expiry=None, auto=True: rows)
+    monkeypatch.setattr(nse_chain, "get_chain", lambda s, expiry=None, auto=True, want=None: rows)
     return rows
 
 
@@ -113,15 +113,50 @@ def test_unquoted_strikes_are_not_selected(chain):
 
 
 def test_empty_chain_returns_none_so_callers_fall_back(monkeypatch):
-    monkeypatch.setattr(nse_chain, "get_chain", lambda s, expiry=None, auto=True: [])
+    monkeypatch.setattr(nse_chain, "get_chain", lambda s, expiry=None, auto=True, want=None: [])
     assert nse_chain.implied_vol("^NSEI", 24500, "call") is None
 
 
 def test_get_chain_never_raises_when_the_fetch_fails(monkeypatch):
     """An NSE outage must cost accuracy, not availability."""
-    monkeypatch.setattr(nse_chain, "_cache_fresh", lambda s: False)
+    monkeypatch.setattr(nse_chain, "_cache_fresh", lambda s, want=None: False)
     def boom(*a, **k):
         raise RuntimeError("NSE down")
     monkeypatch.setattr(nse_chain, "refresh_chain", boom)
     monkeypatch.setattr(nse_chain, "q", lambda *a, **k: [])
     assert nse_chain.get_chain("^NSEI") == []
+
+
+# ---------------------------------------------------------------- expiry targeting
+
+def test_cache_is_stale_when_no_expiry_is_near_the_horizon(monkeypatch):
+    """The bug: only the front expiry was ever cached, so a 90-day strategy priced off
+    the 1-day contract forever. A cached chain far from the horizon is not usable."""
+    monkeypatch.setattr(nse_chain, "q", lambda *a, **k: [
+        {"expiry": date.today() + timedelta(days=1), "f": datetime.now(timezone.utc)}])
+    assert nse_chain._cache_fresh("^NSEI", want=date.today() + timedelta(days=2)) is True
+    assert nse_chain._cache_fresh("^NSEI", want=date.today() + timedelta(days=90)) is False
+
+
+def test_cache_without_a_horizon_only_checks_age(monkeypatch):
+    monkeypatch.setattr(nse_chain, "q", lambda *a, **k: [
+        {"expiry": date.today() + timedelta(days=1), "f": datetime.now(timezone.utc)}])
+    assert nse_chain._cache_fresh("^NSEI") is True
+
+
+def test_stale_timestamp_beats_a_well_matched_expiry(monkeypatch):
+    old = datetime.now(timezone.utc) - timedelta(hours=5)
+    monkeypatch.setattr(nse_chain, "q", lambda *a, **k: [
+        {"expiry": date.today() + timedelta(days=30), "f": old}])
+    assert nse_chain._cache_fresh("^NSEI", want=date.today() + timedelta(days=30)) is False
+
+
+def test_implied_vol_asks_for_the_horizon_it_needs(monkeypatch):
+    """implied_vol must pass the target date down so the right contract gets fetched."""
+    seen = {}
+    def fake_get_chain(sym, expiry=None, auto=True, want=None):
+        seen["want"] = want
+        return []
+    monkeypatch.setattr(nse_chain, "get_chain", fake_get_chain)
+    nse_chain.implied_vol("^NSEI", 24500, "call", days=90)
+    assert seen["want"] == date.today() + timedelta(days=90)

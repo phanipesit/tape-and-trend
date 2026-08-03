@@ -95,7 +95,10 @@ def _fetch(symbol: str, expiry: date | None = None) -> tuple[list[dict], date, f
         available = [d for d in (_parse_expiry(s) for s in raw) if d]
         if not available:
             raise RuntimeError(f"no expiryDates for {nse_sym} (HTTP {ci.status_code})")
-        chosen = expiry if expiry in available else available[0]
+        # Nearest to the requested horizon, not merely the front month. Always taking
+        # available[0] meant a 90-day strategy was priced on the 1-day contract's IV,
+        # which is a different instrument — vol is not flat across expiries.
+        chosen = min(available, key=lambda e: abs((e - expiry).days)) if expiry else available[0]
 
         r = c.get(f"{BASE}/option-chain-v3?type={kind}&symbol={nse_sym}"
                   f"&expiry={chosen:%d-%b-%Y}")
@@ -139,11 +142,26 @@ def refresh_chain(symbol: str, expiry: date | None = None) -> int:
     return len(out)
 
 
-def _cache_fresh(symbol: str) -> bool:
-    rows = q("SELECT max(fetched_at) f FROM option_chain WHERE symbol=:s", s=symbol)
-    at = rows[0]["f"] if rows else None
-    return at is not None and (datetime.now(timezone.utc) - at
-                               < timedelta(minutes=NSE_CHAIN_STALE_MINUTES))
+# How far a cached expiry may sit from the requested horizon before it's worth fetching
+# the right one. NSE runs weekly then monthly expiries, so a week's tolerance means we
+# reuse the cache within an expiry cycle and refetch when the horizon really moves.
+EXPIRY_TOLERANCE_DAYS = 7
+
+
+def _cache_fresh(symbol: str, want: date | None = None) -> bool:
+    """Fresh means recently fetched *and*, when a horizon is given, holding an expiry
+    near it — otherwise a cached front-month chain would satisfy a 90-day request
+    forever and every long-dated strategy would price off the wrong contract."""
+    rows = q("""SELECT expiry, max(fetched_at) f FROM option_chain
+                WHERE symbol=:s GROUP BY expiry""", s=symbol)
+    if not rows:
+        return False
+    if want is not None:
+        rows = [r for r in rows if abs((r["expiry"] - want).days) <= EXPIRY_TOLERANCE_DAYS]
+        if not rows:
+            return False
+    at = max(r["f"] for r in rows)
+    return (datetime.now(timezone.utc) - at) < timedelta(minutes=NSE_CHAIN_STALE_MINUTES)
 
 
 def expiries(symbol: str) -> list[date]:
@@ -151,12 +169,16 @@ def expiries(symbol: str) -> list[date]:
             q("SELECT DISTINCT expiry FROM option_chain WHERE symbol=:s ORDER BY expiry", s=symbol)]
 
 
-def get_chain(symbol: str, expiry: date | None = None, auto: bool = True) -> list[dict]:
-    """Cached chain rows, refreshed when stale. Never raises — an empty list means
-    'no IV available', which callers read as 'use realized vol'."""
-    if auto and not _cache_fresh(symbol):
+def get_chain(symbol: str, expiry: date | None = None, auto: bool = True,
+              want: date | None = None) -> list[dict]:
+    """Cached chain rows, refreshed when stale. `want` is the horizon being priced, so
+    the right expiry gets fetched rather than whichever one happens to be cached.
+
+    Never raises — an empty list means 'no IV available', which callers read as
+    'use realized vol'."""
+    if auto and not _cache_fresh(symbol, want):
         try:
-            refresh_chain(symbol, expiry)
+            refresh_chain(symbol, expiry or want)
         except Exception:
             log.warning("option chain refresh failed for %s, serving cache", symbol, exc_info=True)
     sql = "SELECT * FROM option_chain WHERE symbol=:s"
@@ -175,14 +197,14 @@ def implied_vol(symbol: str, strike: float, kind: str, days: int = 30,
     would throw away exactly the skew this feed was added to capture.
     """
     opt_type = "CE" if kind == "call" else "PE"
-    rows = [r for r in get_chain(symbol, auto=auto)
+    today = date.today()
+    wanted = today + timedelta(days=max(days, 0))
+    rows = [r for r in get_chain(symbol, auto=auto, want=wanted)
             if r["opt_type"] == opt_type and r["iv"] is not None]
     if not rows:
         return None
 
     # Expiry nearest the requested horizon; strike nearest the leg, within that expiry.
-    today = date.today()
-    wanted = today + timedelta(days=max(days, 0))
     chosen = min({r["expiry"] for r in rows}, key=lambda e: abs((e - wanted).days))
     same = [r for r in rows if r["expiry"] == chosen]
     best = min(same, key=lambda r: abs(float(r["strike"]) - strike))

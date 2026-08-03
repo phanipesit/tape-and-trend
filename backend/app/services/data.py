@@ -12,7 +12,18 @@ from .market_hours import venue_for, venue_state
 
 log = logging.getLogger(__name__)
 
-BSE_OVERRIDE = {"HDFCBANK"}   # symbols with bad Yahoo NSE data → use BSE feed
+# Symbols whose Yahoo NSE (.NS) daily feed is bad enough to prefer BSE (.BO).
+#
+# Currently empty, and that is a finding rather than an oversight. HDFCBANK lived here
+# because its .NS daily data was broken; verified 2026-08-03 the situation has inverted —
+# .BO returns 2 bars over six months while .NS returns a complete 125. Keeping the
+# override meant every refresh fetched .BO, hit the len(df) < 50 fallback in
+# refresh_candles, and refetched .NS: two network calls to land where one would have.
+# Intraday never routes here at all (see yf_symbol's `intraday` flag) since Yahoo serves
+# no current intraday for .BO whatsoever.
+#
+# The mechanism stays for whichever listing degrades next; re-check before adding to it.
+BSE_OVERRIDE: set[str] = set()
 
 # yfinance shares one session/cache across threads and is NOT thread-safe:
 # concurrent downloads from parallel request handlers (e.g. /watchlist and
