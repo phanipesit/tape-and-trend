@@ -6,15 +6,22 @@ numbers — the payoff *shape* was right but every break-even, max-profit and ma
 level was arbitrary. Those levels are what the AI analysis reasons over, so they have
 to be model-derived rather than invented.
 
-Volatility comes from the underlying's own cached daily candles (realized vol), not a
-live option chain — we have no IV feed. That makes these *theoretical* prices: right
-order of magnitude and correctly shaped across strikes, but not broker quotes.
+Volatility is **implied** where NSE publishes it (see services/nse_chain.py) and realized
+vol from the underlying's own cached candles everywhere else. IV is looked up *per leg*,
+not once per strategy: a single realized number cannot express a skew, and the skew is
+where it is most wrong. On 2026-08-03 NIFTY's 1-day chain quoted 12.6% at the money, 29%
+on the 25500 call and 50% on the 23000 put, against one realized figure of 12.3% — so a
+wing priced off realized vol was out by a factor of four in vol terms.
+
+Any chain failure falls back to realized rather than erroring, so the lab always prices.
+`vol_source` on each leg says which was used; never present the two as interchangeable.
 """
 import math
 
 import numpy as np
 
 from .data import get_candles, get_symbol
+from .nse_chain import implied_vol
 
 RISK_FREE = {"IN": 0.065, "US": 0.043}   # ~10y sovereign yields; a payoff lab needs no term structure
 TRADING_DAYS = 252
@@ -80,33 +87,62 @@ def black_scholes(S: float, K: float, t: float, vol: float, kind: str, r: float)
     }
 
 
-def price_strategy(symbol: str, legs: list[dict], days: int = 30) -> dict:
-    """Theoretical premium + Greeks per leg, plus position totals.
+def price_strategy(symbol: str, legs: list[dict], days: int = 30,
+                   use_implied: bool = True) -> dict:
+    """Premium + Greeks per leg, plus position totals.
 
     `legs` are {type, strike, qty} — qty>0 long, qty<0 short. Position Greeks are
     qty-weighted so a spread nets out the way the actual position would.
+
+    Each leg is priced on its own implied vol where the chain has that strike, which is
+    what makes a skewed strategy (any spread with a wing) price sanely. Realized vol is
+    the fallback, per leg, so one missing strike doesn't drop the whole strategy back.
     """
     if not legs:
         raise ValueError("no legs supplied")
     meta = get_symbol(symbol)
     spot = float(get_candles(symbol)["c"].iloc[-1])
-    vol = realized_vol(symbol)
+    fallback = realized_vol(symbol)
     r = RISK_FREE.get(meta["market"], RISK_FREE["US"])
     t = max(days, 0) / 365.0
 
     priced, totals = [], {k: 0.0 for k in ("delta", "gamma", "theta", "vega", "rho")}
     net_premium = 0.0
+    chain_meta = None
     for leg in legs:
-        g = black_scholes(spot, float(leg["strike"]), t, vol, leg["type"], r)
+        strike = float(leg["strike"])
+        iv = implied_vol(symbol, strike, leg["type"], days) if use_implied else None
+        vol = iv["vol"] if iv else fallback
+        g = black_scholes(spot, strike, t, vol, leg["type"], r)
         qty = float(leg["qty"])
-        priced.append({**leg, **g})
+        priced.append({
+            **leg, **g,
+            "vol": round(vol, 4), "vol_pct": round(vol * 100, 2),
+            "vol_source": "implied" if iv else "realized",
+            # market_ltp is NSE's traded price for that strike: the sanity check on our
+            # model that no amount of theory can substitute for.
+            "market_ltp": iv["ltp"] if iv else None,
+            "strike_quoted": iv["strike_used"] if iv else None,
+        })
+        if iv and chain_meta is None:
+            chain_meta = {"expiry": iv["expiry"], "expiry_days": iv["expiry_days"],
+                          "fetched_at": iv["fetched_at"]}
         net_premium += qty * g["premium"]        # >0 paid out (debit), <0 received (credit)
         for k in totals:
             totals[k] += qty * g[k]
 
+    n_implied = sum(1 for p in priced if p["vol_source"] == "implied")
     return {
         "symbol": symbol, "spot": round(spot, 2), "days": days,
-        "vol": round(vol, 4), "vol_pct": round(vol * 100, 1), "rate": r,
+        # Kept for the existing UI and as the fallback figure; per-leg vol is the truth now.
+        "vol": round(fallback, 4), "vol_pct": round(fallback * 100, 1), "rate": r,
+        "vol_source": ("implied" if n_implied == len(priced)
+                       else "mixed" if n_implied else "realized"),
+        "legs_implied": n_implied, "legs_total": len(priced),
+        "chain": chain_meta,
+        # A chain expiry far from the requested horizon means the IV describes a
+        # different contract than the one being modelled — say so rather than hide it.
+        "expiry_mismatch": bool(chain_meta and abs(chain_meta["expiry_days"] - days) > 7),
         "legs": priced,
         "net_premium": round(net_premium, 2),
         "position": {k: round(v, 4) for k, v in totals.items()},

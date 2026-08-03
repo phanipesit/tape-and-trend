@@ -55,8 +55,13 @@ export default function Options() {
     } })
       .then((res) => {
         setLegs(res.legs.map((L) => ({ type: L.type, k: L.strike, qty: L.qty, prem: L.premium,
-                                       delta: L.delta, theta: L.theta, vega: L.vega })));
-        setModel({ vol_pct: res.vol_pct, position: res.position, net_premium: res.net_premium });
+                                       delta: L.delta, theta: L.theta, vega: L.vega,
+                                       volPct: L.vol_pct, volSrc: L.vol_source,
+                                       marketLtp: L.market_ltp })));
+        setModel({ vol_pct: res.vol_pct, position: res.position, net_premium: res.net_premium,
+                   volSource: res.vol_source, legsImplied: res.legs_implied,
+                   legsTotal: res.legs_total, chain: res.chain,
+                   expiryMismatch: res.expiry_mismatch });
       })
       .catch((e) => { setPriceErr(String(e.message || e)); setLegs(raw.map((L) => ({ ...L, prem: 0 }))); })
       .finally(() => setPricing(false));
@@ -117,9 +122,11 @@ export default function Options() {
     <div className="space-y-4">
       <h1 className="text-xl font-bold">Options strategy lab</h1>
       <p className="text-mut text-sm">
-        Expiry payoff for preset strategies. Premiums are <b>theoretical</b> — Black-Scholes priced off
-        {sym}&apos;s own realized volatility, not live option-chain quotes. Strikes and premiums stay
-        editable, so paste your broker&apos;s real quotes before judging any trade.
+        Expiry payoff for preset strategies, Black-Scholes priced. Volatility is{" "}
+        <b>live implied vol from NSE&apos;s option chain</b> where that strike is quoted —
+        per leg, so a skew survives — and falls back to {sym}&apos;s realized volatility
+        where it isn&apos;t. Strikes and premiums stay editable, so paste your broker&apos;s
+        real quotes before judging any trade.
       </p>
       <div className="flex gap-3 flex-wrap items-center text-xs">
         <select value={sym} onChange={(e) => setSym(e.target.value)}>
@@ -135,12 +142,29 @@ export default function Options() {
         <select value={days} onChange={(e) => setDays(+e.target.value)}>
           {EXPIRIES.map((d) => <option key={d} value={d}>{d} days to expiry</option>)}</select>
         <span className="text-mut font-mono">spot {spot ? fmt(spot) : "…"}</span>
-        {model && <span className="text-brass font-mono">vol {model.vol_pct}%</span>}
+        {model && (
+          <span className="font-mono" title={
+            model.volSource === "implied" ? `Live NSE implied vol, expiry ${model.chain?.expiry}`
+            : model.volSource === "mixed" ? `${model.legsImplied}/${model.legsTotal} legs on live IV, the rest on realized vol`
+            : "No NSE chain for this symbol — realized vol from cached candles"}>
+            <span className={model.volSource === "realized" ? "text-mut" : "text-up"}>
+              {model.volSource === "implied" ? "IV" : model.volSource === "mixed"
+                ? `IV ${model.legsImplied}/${model.legsTotal}` : "realized"}</span>
+            <span className="text-brass"> {model.vol_pct}%</span>
+          </span>)}
         <button className="ghost" onClick={() => spot && priceLegs(legs || STRATS[strat].mk(spot), days)}
                 disabled={pricing || !spot}>
           {pricing ? "Pricing…" : "↻ Re-price"}</button>
       </div>
       {priceErr && <p className="text-down text-xs">Pricing failed — is the backend running? {priceErr}</p>}
+      {/* IV borrowed from a contract expiring at a very different time describes a
+          different thing than the one being modelled. Say so rather than quietly use it. */}
+      {model?.expiryMismatch && (
+        <p className="text-brass text-xs">
+          ⚠ Implied vol is from the {model.chain.expiry} chain ({model.chain.expiry_days}d),
+          but you are modelling {days}d. Vol is not flat across expiries — treat these
+          premiums as indicative and re-check against your broker.
+        </p>)}
       {R && legs && (
         <div className="grid lg:grid-cols-3 gap-4">
           <div className="card lg:col-span-2 h-96">
@@ -161,12 +185,21 @@ export default function Options() {
             <div><b className="text-sm">{STRATS[strat].n}</b>
               <p className="text-mut mt-1">{STRATS[strat].d}</p></div>
             <table className="w-full"><thead><tr>
-              <th>LEG</th><th>STRIKE</th><th>PREMIUM</th><th>DELTA</th><th>QTY</th></tr></thead><tbody>
+              <th>LEG</th><th>STRIKE</th><th>PREMIUM</th><th title="Volatility used for this leg">VOL</th>
+              <th title="NSE's last traded price for this strike — the check on the model">NSE LTP</th>
+              <th>DELTA</th><th>QTY</th></tr></thead><tbody>
               {legs.map((L, i) => (
                 <tr key={i}>
                   <td className={L.qty > 0 ? "text-up" : "text-down"}>{L.qty > 0 ? "Long" : "Short"} {L.type}</td>
                   <td><input className="w-20" type="number" value={L.k} onChange={setLeg(i, "k")} /></td>
                   <td><input className="w-20" type="number" step="0.05" value={L.prem} onChange={setLeg(i, "prem")} /></td>
+                  {/* Per-leg vol is the point of the IV feed: an at-the-money number
+                      applied to a wing is what priced wings at zero before. */}
+                  <td className={`font-mono ${L.volSrc === "implied" ? "text-up" : "text-mut"}`}
+                      title={L.volSrc === "implied" ? "Live NSE implied vol for this strike"
+                                                    : "Realized vol — this strike isn't quoted"}>
+                    {L.volPct == null ? "—" : `${L.volPct}%`}</td>
+                  <td className="font-mono text-brass">{L.marketLtp == null ? "—" : fmt(L.marketLtp)}</td>
                   <td className="text-mut font-mono">{L.delta != null ? L.delta.toFixed(2) : "—"}</td>
                   <td>{L.qty > 0 ? "+" : ""}{L.qty}</td>
                 </tr>))}

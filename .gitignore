@@ -5,4 +5,8 @@ __pycache__/
 .env
 .venv/
 venv/
-backend/tools/nse_captures/   # raw NSE payloads: large, timestamped, regenerable
+# Raw NSE payloads: large, timestamped, regenerable via tools/capture_nse_chain.py.
+# The comment must sit on its own line — git treats a trailing "# ..." as part of the
+# pattern, so the version with an inline comment silently ignored nothing and 632KB of
+# captures got committed.
+backend/tools/nse_captures/

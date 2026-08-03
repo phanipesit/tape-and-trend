@@ -24,6 +24,7 @@ psql -d tapetrend -f db/migration_007_rotation.sql        # rotation_runs + ^NSE
 psql -d tapetrend -f db/migration_008_niftybank.sql       # ^NSEBANK index row
 psql -d tapetrend -f db/migration_009_intraday.sql        # intraday_ohlcv table
 psql -d tapetrend -f db/migration_010_global_markets.sql # asset_class/region + world indices, metals, macro
+psql -d tapetrend -f db/migration_011_option_chain.sql   # cached NSE option chain (implied vol)
 ```
 Run every migration in order — skipping any leaves tables that feature code reads at
 request time missing. `main.py`'s startup check logs an error naming each absent table.
@@ -205,8 +206,28 @@ futures would have appeared in every stock dropdown. Foreign venues use `market=
 else passes the ticker through unchanged, which is what Yahoo wants for `^FTSE`/`^N225`/
 `000001.SS`.
 
-**Options pricing** (`services/options.py`) is Black-Scholes with **realized** volatility standing in
-for implied — there's no option-chain feed, so `realized_vol()` annualises the stdev of 60 days of
+**Implied volatility** (`services/nse_chain.py`, migration_011) replaced realized vol as the
+*primary* input to options pricing. NSE publishes IV free; two things about the endpoint are
+worth not rediscovering. **`option-chain-v3` requires an `expiry` parameter** — without it you
+get HTTP 200 with a 2-byte `{}`, which was first misread as "the market is closed" until the
+same `{}` came back at 09:34 on an open Monday. Call `/api/option-chain-contract-info?symbol=X`
+for `expiryDates`, then pass one. And **we are not bot-blocked**: on the session that returns
+`{}`, `/api/allIndices` returns 113KB — don't chase a WAF that isn't there. A cookie warm-up
+plus browser UA/Referer is enough.
+
+**IV is looked up per leg, never once per strategy.** That is the entire point: on 2026-08-03
+NIFTY's 1-day chain quoted 12.6% ATM, 29% on the 25500 call and 50% on the 23000 put against
+one realized figure of 12.3%, and pricing the wings off realized put **both of them at exactly
+0.00** while the market had them at 1.20 and 0.85. Fallback is per leg too, so one unquoted
+strike doesn't drag the whole strategy back to realized. `vol_source` is reported per leg and
+in aggregate (`implied`/`mixed`/`realized`) and the UI colours them differently — a modelled
+number and a market-implied one must never look the same. `expiry_mismatch` flags IV borrowed
+from a contract more than a week from the modelled horizon. NSE sends `0` for unquoted strikes;
+`_num()` maps that to `None`, because a zero IV is a blank, not a measurement, and would
+collapse the option to intrinsic value.
+
+**Options pricing** (`services/options.py`) is Black-Scholes, with `realized_vol()` now the
+**fallback** rather than the only source — it annualises the stdev of 60 days of
 log returns from the same cached candles everything else uses (clamped to `MIN_VOL`/`MAX_VOL` so a
 flat history can't produce absurd premiums). Before this, the frontend hardcoded premiums as fixed
 percentages of spot (a long call was always 3% of spot), so time to expiry wasn't modelled at all
@@ -325,6 +346,6 @@ describes a *different* migration (journal/risk/alerts schema changes) as "migra
 journal columns the phantom "migration_002" was supposed to create), and
 `migration_006_signal_outcomes.sql`, `migration_007_rotation.sql`,
 `migration_008_niftybank.sql`, `migration_009_intraday.sql`, and
-`migration_010_global_markets.sql` — so the next free number is `migration_011`. If you're
+`migration_010_global_markets.sql`, and `migration_011_option_chain.sql` — so the next free number is `migration_012`. If you're
 adding a new migration file, check what's actually in `db/` rather than trusting either
 document's numbering, this line included.

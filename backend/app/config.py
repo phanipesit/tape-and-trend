@@ -17,4 +17,7 @@ HOME_TZ = os.getenv("HOME_TZ", "Asia/Kolkata")
 CANDLE_STALE_HOURS = 12   # refetch from yfinance if cache older than this
 INTRADAY_STALE_MINUTES = 5   # intraday candles go stale far faster than daily ones
 FX_STALE_MINUTES = 30     # refetch USD/INR spot rate if cached value older than this
+# NSE's chain endpoint is undocumented and rate-limited, and IV does not move fast enough
+# to be worth hammering it — 15 min keeps a strategy re-price cheap while staying current.
+NSE_CHAIN_STALE_MINUTES = int(os.getenv("NSE_CHAIN_STALE_MINUTES", "15"))
 USD_INR_FALLBACK = 83.0   # only used if a live rate has never been fetched successfully

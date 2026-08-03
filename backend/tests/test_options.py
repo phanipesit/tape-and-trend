@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from app.services import options as opt
@@ -162,3 +163,84 @@ def test_price_strategy_rejects_empty_legs(monkeypatch, make_df):
     _patch_market(monkeypatch, make_df, [100.0] * 200)
     with pytest.raises(ValueError):
         opt.price_strategy("X", [], days=30)
+
+
+# ---------------------------------------------------------------- implied vol wiring
+
+def test_each_leg_prices_on_its_own_implied_vol(monkeypatch):
+    """The reason IV was added: one realized number priced both wings at zero."""
+    monkeypatch.setattr(opt, "get_symbol", lambda s: {"market": "IN"})
+    monkeypatch.setattr(opt, "get_candles",
+                        lambda s, **k: pd.DataFrame({"c": [24550.0] * 80}))
+    monkeypatch.setattr(opt, "realized_vol", lambda s, lookback=60: 0.1228)
+
+    ivs = {(23000.0, "put"): 0.4999, (24550.0, "call"): 0.1259, (25500.0, "call"): 0.2927}
+    monkeypatch.setattr(opt, "implied_vol",
+                        lambda sym, strike, kind, days: (
+                            {"vol": ivs[(strike, kind)], "iv_pct": ivs[(strike, kind)] * 100,
+                             "strike_used": strike, "expiry": "2026-08-04", "expiry_days": 1,
+                             "ltp": 1.2, "fetched_at": "x"}
+                            if (strike, kind) in ivs else None))
+
+    r = opt.price_strategy("^NSEI", [
+        {"type": "put", "strike": 23000, "qty": 1},
+        {"type": "call", "strike": 24550, "qty": 1},
+        {"type": "call", "strike": 25500, "qty": -1}], days=1)
+
+    assert r["vol_source"] == "implied" and r["legs_implied"] == 3
+    assert [L["vol_source"] for L in r["legs"]] == ["implied"] * 3
+    # Wings must carry their own vol, not the at-the-money one.
+    assert r["legs"][0]["vol_pct"] == 49.99
+    assert r["legs"][2]["vol_pct"] == 29.27
+    # And therefore must not price at zero, which realized vol did.
+    assert r["legs"][0]["premium"] > 0 and r["legs"][2]["premium"] > 0
+
+
+def test_falls_back_to_realized_per_leg(monkeypatch):
+    monkeypatch.setattr(opt, "get_symbol", lambda s: {"market": "IN"})
+    monkeypatch.setattr(opt, "get_candles",
+                        lambda s, **k: pd.DataFrame({"c": [100.0] * 80}))
+    monkeypatch.setattr(opt, "realized_vol", lambda s, lookback=60: 0.20)
+    # Only the 100 strike is quoted; the 120 wing is not.
+    monkeypatch.setattr(opt, "implied_vol",
+                        lambda sym, strike, kind, days: (
+                            {"vol": 0.3, "iv_pct": 30.0, "strike_used": 100.0,
+                             "expiry": "2026-08-04", "expiry_days": 1, "ltp": 5.0,
+                             "fetched_at": "x"} if strike == 100 else None))
+
+    r = opt.price_strategy("^NSEI", [{"type": "call", "strike": 100, "qty": 1},
+                                          {"type": "call", "strike": 120, "qty": 1}], days=30)
+    assert r["vol_source"] == "mixed" and r["legs_implied"] == 1
+    assert r["legs"][0]["vol_pct"] == 30.0 and r["legs"][0]["vol_source"] == "implied"
+    assert r["legs"][1]["vol_pct"] == 20.0 and r["legs"][1]["vol_source"] == "realized"
+
+
+def test_use_implied_false_prices_everything_on_realized(monkeypatch):
+    monkeypatch.setattr(opt, "get_symbol", lambda s: {"market": "IN"})
+    monkeypatch.setattr(opt, "get_candles",
+                        lambda s, **k: pd.DataFrame({"c": [100.0] * 80}))
+    monkeypatch.setattr(opt, "realized_vol", lambda s, lookback=60: 0.20)
+    def should_not_run(*a, **k):
+        raise AssertionError("implied_vol must not be consulted when use_implied=False")
+    monkeypatch.setattr(opt, "implied_vol", should_not_run)
+
+    r = opt.price_strategy("^NSEI", [{"type": "call", "strike": 100, "qty": 1}],
+                                days=30, use_implied=False)
+    assert r["vol_source"] == "realized" and r["chain"] is None
+
+
+def test_expiry_mismatch_is_flagged(monkeypatch):
+    """IV from a 1-day contract applied to a 30-day model describes a different thing."""
+    monkeypatch.setattr(opt, "get_symbol", lambda s: {"market": "IN"})
+    monkeypatch.setattr(opt, "get_candles",
+                        lambda s, **k: pd.DataFrame({"c": [100.0] * 80}))
+    monkeypatch.setattr(opt, "realized_vol", lambda s, lookback=60: 0.20)
+    monkeypatch.setattr(opt, "implied_vol",
+                        lambda sym, strike, kind, days: {
+                            "vol": 0.3, "iv_pct": 30.0, "strike_used": 100.0,
+                            "expiry": "2026-08-04", "expiry_days": 1, "ltp": 5.0,
+                            "fetched_at": "x"})
+    near = opt.price_strategy("^NSEI", [{"type": "call", "strike": 100, "qty": 1}], days=1)
+    far = opt.price_strategy("^NSEI", [{"type": "call", "strike": 100, "qty": 1}], days=30)
+    assert near["expiry_mismatch"] is False
+    assert far["expiry_mismatch"] is True
