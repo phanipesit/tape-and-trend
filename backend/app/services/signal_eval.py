@@ -13,44 +13,90 @@ after EXPIRE_BARS bars. R is signed: -1.0 = full stop, +2.0 = twice the risk.
 import logging
 from ..db import q
 from .data import all_symbols, get_candles
-from .signals import analyse, STOP_ATR, TARGET_ATR
+from .signals import analyse, analyse_df, STOP_ATR, TARGET_ATR
 
 log = logging.getLogger(__name__)
 
 EXPIRE_BARS = 20
+
+def _log_signals(sym: str, market: str, a: dict) -> int:
+    """Persist every BUY/SELL rule in one analysis. Idempotent via the table's UNIQUE
+    constraint, so re-running a day is free. Shared by snapshot_today and backfill so
+    the two can't drift in how a signal is recorded."""
+    if a.get("error") or not a.get("signals"):
+        return 0
+    close, atr = a["close"], a["atr"]
+    logged = 0
+    for s in a["signals"]:
+        if s["type"] not in ("BUY", "SELL") or not atr:
+            continue
+        if s["type"] == "BUY":
+            direction = "LONG"
+            stop, target = close - STOP_ATR * atr, close + TARGET_ATR * atr
+        else:
+            direction = "SHORT"
+            stop, target = close + STOP_ATR * atr, close - TARGET_ATR * atr
+        rows = q("""INSERT INTO signal_outcomes
+                      (symbol, signal_date, setup_tag, sig_type, direction,
+                       entry, stop, target, atr, score, market)
+                    VALUES (:s, :d, :tag, :ty, :dir, :e, :st, :tg, :atr, :sc, :m)
+                    ON CONFLICT (symbol, signal_date, setup_tag) DO NOTHING
+                    RETURNING id""",
+                 s=sym, d=a["date"], tag=s["tag"], ty=s["type"], dir=direction,
+                 e=round(close, 4), st=round(stop, 4), tg=round(target, 4),
+                 atr=round(atr, 4), sc=a["score"], m=market)
+        logged += len(rows)
+    return logged
+
 
 def snapshot_today() -> int:
     logged = 0
     for meta in all_symbols():
         sym = meta["symbol"]
         try:
-            a = analyse(sym)
+            logged += _log_signals(sym, meta["market"], analyse(sym))
         except Exception:
             log.warning("signal snapshot: analyse failed for %s", sym, exc_info=True)
-            continue
-        if a.get("error") or not a["signals"]:
-            continue
-        close, atr = a["close"], a["atr"]
-        for s in a["signals"]:
-            if s["type"] not in ("BUY", "SELL") or not atr:
-                continue
-            if s["type"] == "BUY":
-                direction = "LONG"
-                stop, target = close - STOP_ATR * atr, close + TARGET_ATR * atr
-            else:
-                direction = "SHORT"
-                stop, target = close + STOP_ATR * atr, close - TARGET_ATR * atr
-            rows = q("""INSERT INTO signal_outcomes
-                          (symbol, signal_date, setup_tag, sig_type, direction,
-                           entry, stop, target, atr, score, market)
-                        VALUES (:s, :d, :tag, :ty, :dir, :e, :st, :tg, :atr, :sc, :m)
-                        ON CONFLICT (symbol, signal_date, setup_tag) DO NOTHING
-                        RETURNING id""",
-                     s=sym, d=a["date"], tag=s["tag"], ty=s["type"], dir=direction,
-                     e=round(close, 4), st=round(stop, 4), tg=round(target, 4),
-                     atr=round(atr, 4), sc=a["score"], m=meta["market"])
-            logged += len(rows)
     return logged
+
+
+def backfill(sessions: int = 30) -> dict:
+    """Reconstruct snapshots for the last `sessions` cached trading days.
+
+    The tracker only ever recorded on days the backend happened to be running, so
+    /edge was measuring a sampled subset rather than a series — five days across
+    three weeks, which is far too sparse to say anything about an edge.
+
+    Reconstruction is exact rather than approximate: every indicator in enrich() is
+    backward-looking, so running analyse_df over candles truncated at date D returns
+    precisely what the engine returned on D. It goes through the same analyse_df the
+    live path uses, deliberately — re-implementing the rules here is how backtest.py
+    and the live engine are already able to drift, and that hazard is not worth
+    repeating for a one-off.
+
+    Only the entry side is reconstructed. Outcomes are then scored forward by
+    evaluate_open() from the same cached bars, so nothing is invented.
+
+    Caveat worth knowing: cached candles are auto-adjusted, so a split or dividend
+    since the signal date shifts historical prices relative to what was on screen at
+    the time. Levels stay internally consistent (entry, stop and target all move
+    together, and R is risk-normalised), so outcome and R survive it; the absolute
+    prices are the adjusted ones.
+    """
+    logged = skipped = 0
+    for meta in all_symbols():
+        sym = meta["symbol"]
+        try:
+            df = get_candles(sym, limit=sessions + 300, auto=False)
+            if len(df) < 60:
+                skipped += 1
+                continue
+            for d in df["d"].tail(sessions):
+                logged += _log_signals(sym, meta["market"], analyse_df(df[df["d"] <= d], sym))
+        except Exception:
+            skipped += 1
+            log.warning("backfill failed for %s", sym, exc_info=True)
+    return {"logged": logged, "skipped": skipped, "sessions": sessions}
 
 def score_signal(direction: str, entry: float, stop: float, target: float, after) -> dict | None:
     """Pure forward-walk over the bars after the signal (max EXPIRE_BARS rows used).
