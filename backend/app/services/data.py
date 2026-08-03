@@ -5,7 +5,10 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
 from ..db import q, engine
-from ..config import CANDLE_STALE_HOURS, FX_STALE_MINUTES, USD_INR_FALLBACK, INTRADAY_STALE_MINUTES
+from ..config import (CANDLE_STALE_HOURS, FX_STALE_MINUTES, USD_INR_FALLBACK,
+                      INTRADAY_STALE_MINUTES, SESSION_CANDLE_STALE_MINUTES)
+# Pure stdlib/zoneinfo, no DB or network — safe to import here without a cycle.
+from .market_hours import venue_for, venue_state
 
 log = logging.getLogger(__name__)
 
@@ -101,11 +104,50 @@ def get_index_symbol(market: str) -> str:
 _last_fetch: dict[str, datetime] = {}
 _fetch_failed: set[str] = set()   # symbols whose most recent refresh attempt errored
 
-def _cache_fresh(symbol: str) -> bool:
+_market_memo: dict[str, str] = {}
+
+
+def _venue_of(symbol: str) -> str | None:
+    """Venue for a symbol. venue_for() only knows the board's index/metal tickers, so
+    plain equities fall back to their market's cash venue."""
+    v = venue_for(symbol)
+    if v:
+        return v
+    m = _market_memo.get(symbol)
+    if m is None:
+        try:
+            m = get_symbol(symbol)["market"]
+        except Exception:
+            return None
+        _market_memo[symbol] = m
+    return {"IN": "NSE", "US": "NYSE"}.get(m)
+
+
+def session_open(symbol: str) -> bool:
+    """Is this symbol's venue trading right now? LUNCH counts as shut — prices don't
+    move through the break, so there is nothing to refetch."""
+    v = _venue_of(symbol)
+    if not v:
+        return False
+    try:
+        return venue_state(v)["state"] == "OPEN"
+    except Exception:
+        return False
+
+
+def _cache_fresh(symbol: str, live: bool = False) -> bool:
     rows = q("SELECT max(d) AS last FROM ohlcv WHERE symbol=:s", s=symbol)
     last = rows[0]["last"]
     if last is None:
         return False
+    if live and session_open(symbol):
+        # The bug this exists to fix: today's bar is *present* the moment the session
+        # opens, so the <=1-day rule below called it fresh and nothing refetched for the
+        # rest of the day — the dashboard's ↻ included. But an in-progress bar's close
+        # changes every tick. Fall back to time-since-fetch while the venue trades.
+        at = _last_fetch.get(symbol)
+        return at is not None and (datetime.now(timezone.utc) - at
+                                   < timedelta(minutes=SESSION_CANDLE_STALE_MINUTES))
     return (datetime.now(timezone.utc).date() - last) <= timedelta(days=1) or \
            _recent_fetch(symbol)
 
@@ -147,8 +189,15 @@ def refresh_candles(symbol: str, period: str = "2y") -> int:
             tuple(p for row in rows for p in row))
     return len(rows)
 
-def get_candles(symbol: str, limit: int = 500, auto: bool = True) -> pd.DataFrame:
-    if auto and not _cache_fresh(symbol):
+def get_candles(symbol: str, limit: int = 500, auto: bool = True,
+                live: bool = False) -> pd.DataFrame:
+    """`live=True` asks for an intra-session price rather than "today's bar exists".
+
+    Opt-in, not the default: routers/screener.py sweeps ~124 symbols through
+    signals.analyse, and flipping this on globally would make that 124 live yfinance
+    fetches — the multi-minute stall that file already warns about.
+    """
+    if auto and not _cache_fresh(symbol, live=live):
         try:
             refresh_candles(symbol)
         except Exception:
@@ -247,9 +296,10 @@ def refresh_fundamentals(symbol: str) -> dict:
     return vals
 
 def quote(symbol: str) -> dict:
-    df = get_candles(symbol, limit=2, auto=False)
-    if len(df) < 2:
-        df = get_candles(symbol, limit=2, auto=True)
+    # live=True: a quote is the one place that should track an open session rather than
+    # settle for "today's bar exists". The watchlist is a handful of symbols, so this
+    # cannot stampede the way a screener sweep would.
+    df = get_candles(symbol, limit=2, auto=True, live=True)
     if df.empty:
         return {"symbol": symbol, "price": None, "change": None, "pct": None, "stale": True}
     last, prev = df.iloc[-1], df.iloc[-2] if len(df) > 1 else df.iloc[-1]

@@ -168,33 +168,39 @@ def test_uniform_board_reports_one_date(wire):
     assert b["rows_behind"] == 0
 
 
-def test_mixed_board_refuses_to_name_a_single_date(monkeypatch, make_df):
-    """The bug this replaced: max(as_of) was reported as *the* board date, so a board
-    with one fresh row and sixteen stale ones claimed to be current."""
-    monkeypatch.setattr(markets, "market_context", lambda *a, **k: UNIVERSE)
-    monkeypatch.setattr(markets, "venue_for", lambda s: "NYSE")
-    monkeypatch.setattr(markets, "venue_state", lambda v: {"state": "CLOSED"})
-
-    def candles(sym, limit=260, auto=False):
-        # ^NSEI gets one extra session, mimicking another page refreshing it.
-        return make_df(rising(261 if sym == "^NSEI" else 260))
-    monkeypatch.setattr(markets, "get_candles", candles)
-
-    b = markets.board()
-    assert b["as_of_mixed"] is True
-    assert b["as_of"] is None                      # no single date may be claimed
-    assert b["as_of_oldest"] < b["as_of_newest"]
-    assert b["rows_behind"] == b["rows_total"] - 1  # everything except ^NSEI
-
-
-def test_behind_rows_are_individually_flagged(monkeypatch, make_df):
+def mixed_board(monkeypatch, make_df, open_symbols=()):
+    """Board where ^NSEI has one extra session. `open_symbols` are the venues trading."""
     monkeypatch.setattr(markets, "market_context", lambda *a, **k: UNIVERSE)
     monkeypatch.setattr(markets, "venue_for", lambda s: "NYSE")
     monkeypatch.setattr(markets, "venue_state", lambda v: {"state": "CLOSED"})
     monkeypatch.setattr(markets, "get_candles",
                         lambda sym, limit=260, auto=False:
                         make_df(rising(261 if sym == "^NSEI" else 260)))
-    b = markets.board()
+    monkeypatch.setattr(markets, "session_open", lambda sym: sym in open_symbols)
+    return markets.board()
+
+
+def test_mixed_board_refuses_to_name_a_single_date(monkeypatch, make_df):
+    """The bug this replaced: max(as_of) was reported as *the* board date, so a board
+    with one fresh row and sixteen stale ones claimed to be current."""
+    b = mixed_board(monkeypatch, make_df)
+    assert b["as_of_mixed"] is True
+    assert b["as_of"] is None                      # no single date may be claimed
+    assert b["as_of_oldest"] < b["as_of_newest"]
+
+
+def test_a_shut_venue_on_its_last_close_is_not_behind(monkeypatch, make_df):
+    """NYSE at 10:15 IST hasn't opened; Friday's close is its correct latest value.
+    Flagging those made 7 of 18 rows 'behind' on a normal morning, which is how a
+    warning gets trained out of a user."""
+    b = mixed_board(monkeypatch, make_df, open_symbols=())
+    assert b["rows_behind"] == 0
+    assert all(not r["is_behind"] for g in b["regions"] for r in g["rows"])
+
+
+def test_an_open_venue_that_lags_the_board_is_behind(monkeypatch, make_df):
+    b = mixed_board(monkeypatch, make_df, open_symbols=("^GSPC",))
     rows = {r["symbol"]: r for g in b["regions"] for r in g["rows"]}
-    assert rows["^NSEI"]["is_behind"] is False
     assert rows["^GSPC"]["is_behind"] is True
+    assert rows["^NSEI"]["is_behind"] is False     # open or not, it holds the newest bar
+    assert b["rows_behind"] == 1

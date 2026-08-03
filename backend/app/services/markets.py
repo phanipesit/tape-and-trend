@@ -12,7 +12,7 @@ derived here so the frontend renders rather than computes.
 """
 import logging
 
-from .data import get_candles, market_context
+from .data import get_candles, market_context, refresh_candles, session_open
 from .indicators import sma
 from .market_hours import venue_for, venue_state
 
@@ -132,15 +132,19 @@ def board() -> dict:
     regions = [{"region": g, "rows": sorted(by_region[g], key=lambda r: r["symbol"])}
                for g in REGION_ORDER if g in by_region]
 
-    # Rows do not share an as-of date. The board never fetches (auto=False), so a symbol
-    # only advances when the ↻ button runs or some other page happens to refresh it with
-    # auto=True — the signals and day-trading pages do that for ^NSEI/^NSEBANK. Reporting
-    # max() as *the* board date therefore claimed "close of <today>" while most of the
-    # board was days behind. Report the spread and let the UI say so.
+    # Rows do not share an as-of date, for two completely different reasons, and only one
+    # is a problem:
+    #   1. the venue has not opened yet today (NYSE at 10:00 IST) — Friday's close is
+    #      simply the correct latest value, nothing is wrong;
+    #   2. the venue is trading and our cache hasn't caught up — that is staleness.
+    # Comparing dates alone conflated them and flagged 7 of 18 rows as behind at 10:15
+    # IST when every one was a shut market. A warning that fires on half the board on a
+    # normal morning is one the user learns to ignore, so `is_behind` now requires the
+    # venue to actually be open. The date spread is still reported, just not as an alarm.
     dates = sorted({r["as_of"] for r in rows})
     newest = dates[-1] if dates else None
     for r in rows:
-        r["is_behind"] = r["as_of"] != newest
+        r["is_behind"] = bool(session_open(r["symbol"]) and r["as_of"] != newest)
     behind = sum(r["is_behind"] for r in rows)
 
     return {
@@ -161,11 +165,18 @@ def board() -> dict:
 def refresh_board(force: bool = False) -> dict:
     """Pull fresh candles for every board symbol. Called explicitly (a button / the
     background loop), never from the read path — 18 sequential yfinance fetches is
-    far too slow to sit in a dashboard render."""
+    far too slow to sit in a dashboard render.
+
+    Calls refresh_candles directly rather than get_candles(auto=True). The gate in
+    _cache_fresh treats "today's bar exists" as fresh, so once a session opened this
+    silently fetched nothing and the ↻ button did nothing at all. A button the user
+    pressed is an explicit instruction to go and look; it must never be rate-limited
+    by the same heuristic that protects automatic reads.
+    """
     ok, failed = [], []
     for meta in market_context():
         try:
-            get_candles(meta["symbol"], limit=1, auto=True)
+            refresh_candles(meta["symbol"])
             ok.append(meta["symbol"])
         except Exception:
             failed.append(meta["symbol"])

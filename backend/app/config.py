@@ -15,6 +15,11 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 # venue's, so "when does NYSE open" is answerable without mental arithmetic. IANA name.
 HOME_TZ = os.getenv("HOME_TZ", "Asia/Kolkata")
 CANDLE_STALE_HOURS = 12   # refetch from yfinance if cache older than this
+# While a venue is OPEN today's daily bar is still forming — its close moves every tick,
+# so "we already have today's bar" is not freshness. Callers that want an intra-session
+# price pass live=True to get_candles and get this window instead. Opt-in on purpose:
+# applying it everywhere would turn the screener's ~124-symbol sweep into 124 live fetches.
+SESSION_CANDLE_STALE_MINUTES = int(os.getenv("SESSION_CANDLE_STALE_MINUTES", "10"))
 INTRADAY_STALE_MINUTES = 5   # intraday candles go stale far faster than daily ones
 FX_STALE_MINUTES = 30     # refetch USD/INR spot rate if cached value older than this
 # NSE's chain endpoint is undocumented and rate-limited, and IV does not move fast enough
