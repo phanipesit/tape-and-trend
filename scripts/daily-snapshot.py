@@ -68,6 +68,16 @@ def main() -> int:
     parts.append(f"logged={snapshot_today()}")
     parts.append(f"scored={evaluate_open()}")
 
+    # FII/DII capture lives here because NSE publishes no history: the endpoint serves
+    # the latest trading day and nothing else, so a day not captured is gone for good.
+    # Unlike the signal snapshot above, no backfill can rescue it. Failure must not take
+    # the rest of the run down with it.
+    try:
+        from app.services.flows import refresh as refresh_flows
+        parts.append(f"flows={refresh_flows()}")
+    except Exception as e:
+        parts.append(f"flows=FAILED({type(e).__name__}: {str(e)[:60]})")
+
     line = " | ".join(parts)
     print(line)
     LOG.parent.mkdir(parents=True, exist_ok=True)

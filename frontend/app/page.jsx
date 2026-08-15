@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import FlowsStrip from "../components/FlowsStrip";
 import GlobalMarkets from "../components/GlobalMarkets";
 import NewsWire from "../components/NewsWire";
 import { api, fmt } from "../lib/api";
@@ -39,6 +40,7 @@ export default function Dashboard() {
       </div>
       {err && <div className="card border-down text-down text-sm">Backend unreachable — is uvicorn running on :8000? {err}</div>}
       <GlobalMarkets />
+      <FlowsStrip />
       {alerts.length > 0 && (
         <div className="card border-brass text-sm">
           <b className="text-brass">🔔 {alerts.length} alert{alerts.length > 1 ? "s" : ""} fired:</b>{" "}
