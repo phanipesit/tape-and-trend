@@ -1,7 +1,8 @@
 """Vectorised long-only backtester with costs + slippage, results stored in psql."""
 import json
 import numpy as np
-from .data import get_candles
+from .costs import round_trip_pct
+from .data import get_candles, get_symbol
 from .indicators import enrich, rsi, sma
 from .signals import RSI_OVERSOLD, RSI_OVERBOUGHT, BREAKOUT_RVOL
 from .perf import perf_stats, INITIAL_CAPITAL
@@ -62,23 +63,34 @@ def run(symbol: str, strategy: str, params: dict) -> dict:
     else:
         return {"error": f"unknown strategy {strategy}"}
 
+    # cost_model="real" uses services/costs.py's published NSE/SEBI (or US) schedule
+    # instead of a guessed fee_bps. It matters: on a strategy sitting near zero
+    # expectancy, the cost assumption decides the sign of the answer. Halved because
+    # costs.py quotes a round trip and this is charged per side.
+    if params.get("cost_model") == "real":
+        mkt = get_symbol(symbol)["market"]
+        tt = params.get("trade_type", "delivery")
+        side_fee = round_trip_pct(INITIAL_CAPITAL, mkt, tt) / 100 / 2
+    else:
+        side_fee = fee
+
     cash, qty, entry_px = INITIAL_CAPITAL, 0.0, 0.0
     trades, curve = [], []
     for i in range(1, len(c)):
         px = c[i]
         if qty == 0 and entry_sig[i]:
             fill = px * (1 + slip)
-            qty = cash * (1 - fee) / fill
+            qty = cash * (1 - side_fee) / fill
             entry_px, cash = fill, 0.0
         elif qty > 0 and exit_sig[i]:
             fill = px * (1 - slip)
-            cash = qty * fill * (1 - fee)
+            cash = qty * fill * (1 - side_fee)
             trades.append({"in": round(entry_px, 2), "out": round(fill, 2),
                            "ret": round((fill / entry_px - 1) * 100, 2)})
             qty = 0.0
         curve.append(cash + qty * px)
     if qty > 0:
-        cash = qty * c[-1] * (1 - fee)
+        cash = qty * c[-1] * (1 - side_fee)
         trades.append({"in": round(entry_px, 2), "out": round(c[-1], 2),
                        "ret": round((c[-1] / entry_px - 1) * 100, 2)})
         curve[-1] = cash
