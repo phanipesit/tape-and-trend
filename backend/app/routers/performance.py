@@ -1,11 +1,20 @@
 from fastapi import APIRouter
 from ..db import q
+from ..services.edge_stats import rule_stats
 
 router = APIRouter(prefix="/api", tags=["performance"])
 
+
+@router.get("/performance/rules")
+def performance_rules(days: int = 3650):
+    """Per-rule expectancy with 95% confidence intervals, split by market regime."""
+    return rule_stats(days)
+
+# A win is a positive R, not specifically a target hit: an `expired` trade that closed
+# up made money and was previously counted as a loss, understating every win rate here.
 _COLS = """COUNT(*) FILTER (WHERE outcome IS NOT NULL)      AS n,
            COUNT(*) FILTER (WHERE outcome IS NULL)          AS open,
-           COUNT(*) FILTER (WHERE outcome='target_hit')     AS wins,
+           COUNT(*) FILTER (WHERE r_multiple > 0)           AS wins,
            ROUND(AVG(r_multiple), 2)                        AS avg_r,
            ROUND(MAX(r_multiple), 2)                        AS best_r,
            ROUND(MIN(r_multiple), 2)                        AS worst_r,

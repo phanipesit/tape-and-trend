@@ -22,7 +22,7 @@ ROUTERS = (quotes, candles, screener, signals, backtest, portfolio, news, alerts
 # run (see db/migration_004's header), so it has to cover the newest tables too —
 # an entry missing here is a silent failure inside feature code at request time.
 TABLES = ("symbols", "ohlcv", "intraday_ohlcv", "watchlist", "portfolio_tx",
-          "backtest_runs", "alerts", "signal_outcomes", "rotation_runs", "option_chain")
+          "backtest_runs", "alerts", "signal_outcomes", "rotation_runs", "option_chain")  # regime col: migration_012
 
 
 def _check_tables():

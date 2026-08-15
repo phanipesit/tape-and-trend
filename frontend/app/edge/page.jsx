@@ -40,14 +40,96 @@ function AggTable({ title, hint, rows }) {
   );
 }
 
+const VERDICT = {
+  positive: ["edge", "border-up text-up"],
+  negative: ["losing", "border-down text-down"],
+  inconclusive: ["no call", "border-line2 text-mut"],
+  "too few": ["too few", "border-line2 text-dim"],
+  "no data": ["—", "border-line2 text-dim"],
+};
+
+// The panel that answers "which rules actually make money", with the error bar that
+// stops a lucky 30-signal run reading as an edge. rsi_overbought looked like the best
+// rule on n=33 (+0.57 R) and measured -0.223 on n=626 — the interval is what shows that
+// before you act on it, so it is never omitted.
+function RuleStats({ d }) {
+  if (!d) return <div className="card text-dim text-sm">Loading rule statistics…</div>;
+  const Row = ({ r, indent }) => {
+    const [label, cls] = VERDICT[r.verdict] || VERDICT["no data"];
+    const neg = r.avg_r < 0;
+    return (
+      <tr>
+        <td className={`font-mono ${indent ? "pl-4 text-mut" : ""}`}>{r.grp}</td>
+        <td className="text-right text-dim">{r.n}</td>
+        <td className="text-right font-mono">{r.win_pct == null ? "—" : `${r.win_pct}%`}</td>
+        <td className={`text-right font-mono ${neg ? "text-down" : "text-up"}`}>
+          {r.avg_r == null ? "—" : (r.avg_r > 0 ? "+" : "") + r.avg_r}</td>
+        <td className="text-right font-mono text-dim text-[11px]">
+          {r.ci_low == null ? "—" : `[${r.ci_low}, ${r.ci_high}]`}</td>
+        <td className="text-center">
+          <span className={`text-[10px] font-mono border rounded-full px-1.5 py-0.5 ${cls}`}>{label}</span></td>
+      </tr>);
+  };
+  const head = (
+    <thead><tr>
+      <th className="text-left">GROUP</th><th className="text-right">N</th>
+      <th className="text-right">WIN</th><th className="text-right">AVG R</th>
+      <th className="text-right">95% CI</th><th className="text-center">VERDICT</th>
+    </tr></thead>);
+  return (
+    <div className="card text-xs space-y-4">
+      <div>
+        <h2 className="font-semibold text-sm mb-1">Per-rule expectancy
+          <span className="text-dim text-xs font-normal"> · all history, with 95% confidence intervals</span></h2>
+        <p className="text-dim text-[11px] mb-2">
+          A verdict is only given when the interval clears zero. “No call” means the sample
+          cannot distinguish this rule from random — not that it works. A win here is any
+          positive R, including an expired trade that closed up.
+        </p>
+        <table className="w-full">{head}<tbody>
+          {d.overall && <Row r={{ ...d.overall, grp: "ALL RULES" }} />}
+          {d.by_rule?.map((r) => <Row key={r.grp} r={r} indent />)}
+        </tbody></table>
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <h3 className="font-semibold text-sm mb-2">By regime
+            <span className="text-dim text-xs font-normal"> · index vs its 200DMA that day</span></h3>
+          <table className="w-full">{head}<tbody>
+            {d.by_regime?.map((r) => <Row key={r.grp} r={r} />)}</tbody></table>
+        </div>
+        <div>
+          <h3 className="font-semibold text-sm mb-2">By direction</h3>
+          <table className="w-full">{head}<tbody>
+            {d.by_direction?.map((r) => <Row key={r.grp} r={r} />)}</tbody></table>
+        </div>
+      </div>
+      <div>
+        <h3 className="font-semibold text-sm mb-2">Rule × regime
+          <span className="text-dim text-xs font-normal"> · does a rule only work in one tape?</span></h3>
+        <table className="w-full">{head}<tbody>
+          {d.by_rule_regime?.map((r) => <Row key={r.grp} r={r} />)}</tbody></table>
+        <p className="text-dim text-[11px] mt-2">
+          These cells are small and there are many of them, so the best-looking one is the
+          most likely to be luck. Treat a single positive cell as a hypothesis to test, not
+          a finding.
+        </p>
+      </div>
+    </div>);
+}
+
 export default function Edge() {
   const [days, setDays] = useState(90);
   const [d, setD] = useState(null);
+  const [rules, setRules] = useState(null);
   const [err, setErr] = useState("");
   useEffect(() => {
     setErr("");
     api(`/api/performance?days=${days}`).then(setD).catch((e) => setErr(String(e.message || e)));
   }, [days]);
+  // Rule stats deliberately ignore the window: they need every signal ever recorded to
+  // have any statistical power at all.
+  useEffect(() => { api("/api/performance/rules").then(setRules).catch(() => {}); }, []);
 
   const done = d?.recent?.filter((r) => r.outcome) || [];
   const totalR = done.reduce((s, r) => s + (Number(r.r_multiple) || 0), 0);
@@ -72,7 +154,8 @@ export default function Edge() {
           background — check back after the next trading day, and see <Link href="/signals" className="text-brass hover:underline">Swing signals</Link> for
           what the engine is watching now.
         </div>)}
-      <AggTable title="By setup" hint="which rules actually work" rows={d?.by_setup} />
+      <RuleStats d={rules} />
+      <AggTable title="By setup" hint={`last ${days} days only — see the panel above for all history`} rows={d?.by_setup} />
       <div className="grid md:grid-cols-3 gap-4">
         <AggTable title="By market" rows={d?.by_market} />
         <AggTable title="By direction" rows={d?.by_direction} />

@@ -11,13 +11,55 @@ wins (stop assumed first when both fall in one bar), else expired at the close
 after EXPIRE_BARS bars. R is signed: -1.0 = full stop, +2.0 = twice the risk.
 """
 import logging
+from datetime import date
+from functools import lru_cache
+
 from ..db import q
-from .data import all_symbols, get_candles
+from .data import all_symbols, get_candles, get_index_symbol
+from .indicators import sma
 from .signals import analyse, analyse_df, STOP_ATR, TARGET_ATR
 
 log = logging.getLogger(__name__)
 
 EXPIRE_BARS = 20
+REGIME_SMA = 200
+
+
+@lru_cache(maxsize=8)
+def _regime_series(market: str) -> dict:
+    """date -> 'RISK_ON'/'RISK_OFF' for a market's index, close vs its own 200-day SMA.
+
+    Same test rotation.py uses for its market filter, so the two cannot disagree.
+    Cached because backfilling thousands of signals would otherwise re-read and
+    re-average the index for every row. Cleared by regime_cache_clear() when the
+    index gets new bars.
+    """
+    try:
+        idx = get_index_symbol(market)
+        df = get_candles(idx, limit=2000, auto=False)
+    except Exception:
+        log.warning("no index for market %s; regime will be null", market)
+        return {}
+    if len(df) < REGIME_SMA:
+        return {}
+    s = sma(df["c"], REGIME_SMA)
+    return {d: ("RISK_ON" if c > m else "RISK_OFF")
+            for d, c, m in zip(df["d"], df["c"], s) if m == m}   # skip NaN warmup
+
+
+def regime_cache_clear() -> None:
+    _regime_series.cache_clear()
+
+
+def market_regime(market: str, on: date) -> str | None:
+    """Regime on `on`, or the most recent prior session. None when unknowable."""
+    series = _regime_series(market)
+    if not series:
+        return None
+    if on in series:
+        return series[on]
+    earlier = [d for d in series if d <= on]
+    return series[max(earlier)] if earlier else None
 
 def _log_signals(sym: str, market: str, a: dict) -> int:
     """Persist every BUY/SELL rule in one analysis. Idempotent via the table's UNIQUE
@@ -38,13 +80,14 @@ def _log_signals(sym: str, market: str, a: dict) -> int:
             stop, target = close + STOP_ATR * atr, close - TARGET_ATR * atr
         rows = q("""INSERT INTO signal_outcomes
                       (symbol, signal_date, setup_tag, sig_type, direction,
-                       entry, stop, target, atr, score, market)
-                    VALUES (:s, :d, :tag, :ty, :dir, :e, :st, :tg, :atr, :sc, :m)
+                       entry, stop, target, atr, score, market, regime)
+                    VALUES (:s, :d, :tag, :ty, :dir, :e, :st, :tg, :atr, :sc, :m, :rg)
                     ON CONFLICT (symbol, signal_date, setup_tag) DO NOTHING
                     RETURNING id""",
                  s=sym, d=a["date"], tag=s["tag"], ty=s["type"], dir=direction,
                  e=round(close, 4), st=round(stop, 4), tg=round(target, 4),
-                 atr=round(atr, 4), sc=a["score"], m=market)
+                 atr=round(atr, 4), sc=a["score"], m=market,
+                 rg=market_regime(market, date.fromisoformat(a["date"])))
         logged += len(rows)
     return logged
 
@@ -97,6 +140,18 @@ def backfill(sessions: int = 30) -> dict:
             skipped += 1
             log.warning("backfill failed for %s", sym, exc_info=True)
     return {"logged": logged, "skipped": skipped, "sessions": sessions}
+
+def backfill_regime() -> int:
+    """Stamp regime on rows written before migration_012. Idempotent."""
+    rows = q("SELECT id, market, signal_date FROM signal_outcomes WHERE regime IS NULL")
+    n = 0
+    for r in rows:
+        rg = market_regime(r["market"], r["signal_date"])
+        if rg:
+            q("UPDATE signal_outcomes SET regime=:g WHERE id=:i", g=rg, i=r["id"])
+            n += 1
+    return n
+
 
 def score_signal(direction: str, entry: float, stop: float, target: float, after) -> dict | None:
     """Pure forward-walk over the bars after the signal (max EXPIRE_BARS rows used).
