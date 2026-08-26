@@ -2,6 +2,13 @@
 # Reads DATABASE_URL from backend/.env, dumps to %USERPROFILE%\tape-and-trend-backups,
 # and keeps the newest 14 dumps. Registered in Windows Task Scheduler as "TapeTrendBackup"
 # (see README section in this folder or re-run scripts\register-backup-task.ps1).
+#
+# -Force re-dumps even if today's file exists. Without it the script is a no-op once
+# today is already backed up, because the task now also fires at logon: a wall-clock
+# trigger was missing ~16 days in a row on a laptop that is off most evenings. Several
+# logons a day would otherwise mean several 12MB pg_dumps a day for no benefit.
+
+param([switch]$Force)
 
 $ErrorActionPreference = "Stop"
 
@@ -20,6 +27,13 @@ $user = $Matches[1]; $pass = $Matches[2]; $dbHost = $Matches[3]; $port = $Matche
 New-Item -ItemType Directory -Force $backupDir | Out-Null
 $stamp = Get-Date -Format "yyyy-MM-dd"
 $out = Join-Path $backupDir "tapetrend-$stamp.sql"
+
+# Size check as well as existence: a dump killed partway through leaves a small stub,
+# and treating that as "done" would silently skip the day's only real backup.
+if ((Test-Path $out) -and -not $Force -and (Get-Item $out).Length -gt 1MB) {
+    Write-Output "backup already exists for $stamp, skipping (use -Force to override): $out"
+    exit 0
+}
 
 $env:PGPASSWORD = $pass
 & $pgDump -h $dbHost -p $port -U $user -d $db -f $out

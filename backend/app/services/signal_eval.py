@@ -15,7 +15,7 @@ from datetime import date
 from functools import lru_cache
 
 from ..db import q
-from .data import all_symbols, get_candles, get_index_symbol
+from .data import all_symbols, get_candles, get_index_symbol, session_open
 from .indicators import sma
 from .signals import analyse, analyse_df, STOP_ATR, TARGET_ATR
 
@@ -93,13 +93,28 @@ def _log_signals(sym: str, market: str, a: dict) -> int:
 
 
 def snapshot_today() -> int:
-    logged = 0
+    """Record every rule that fired on the latest *final* bar.
+
+    Symbols whose venue is currently trading are skipped. Their newest bar is still
+    forming, and the entry/stop/target derived from a mid-session close would be
+    recorded as if it were the day's outcome — permanently, since the insert is
+    ON CONFLICT DO NOTHING and the first write wins. This never mattered while the
+    only trigger was 18:10 IST, safely after every close we track; it started
+    mattering the moment the task also began firing at logon, which can be any hour.
+    Nothing is lost by skipping: backfill() picks the day up once the bar is final.
+    """
+    logged = skipped = 0
     for meta in all_symbols():
         sym = meta["symbol"]
         try:
+            if session_open(sym):
+                skipped += 1
+                continue
             logged += _log_signals(sym, meta["market"], analyse(sym))
         except Exception:
             log.warning("signal snapshot: analyse failed for %s", sym, exc_info=True)
+    if skipped:
+        log.info("signal snapshot: skipped %d symbol(s) mid-session", skipped)
     return logged
 
 

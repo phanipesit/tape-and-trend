@@ -110,3 +110,46 @@ def test_log_signals_skips_when_atr_is_missing(monkeypatch):
     a = {"date": "2026-07-20", "close": 100.0, "atr": 0, "score": 4.0,
          "signals": [{"type": "BUY", "tag": "ema_cross"}]}
     assert signal_eval._log_signals("X", "IN", a) == 0
+
+
+# ---------------------------------------------------------------- mid-session guard
+
+def test_snapshot_skips_symbols_whose_venue_is_open(monkeypatch):
+    """A forming bar must never be recorded as the day's result. The insert is
+    ON CONFLICT DO NOTHING, so a mid-session write would win permanently and never be
+    corrected. Harmless while the only trigger was 18:10; load-bearing once the task
+    also fires at logon."""
+    from app.services import signal_eval
+
+    monkeypatch.setattr(signal_eval, "all_symbols",
+                        lambda: [{"symbol": "OPEN_ONE", "market": "IN"},
+                                 {"symbol": "SHUT_ONE", "market": "US"}])
+    monkeypatch.setattr(signal_eval, "session_open", lambda s: s == "OPEN_ONE")
+
+    seen = []
+    def fake_analyse(sym):
+        seen.append(sym)
+        return {"date": "2026-08-26", "close": 100.0, "atr": 2.0, "score": 4.0,
+                "signals": [{"type": "BUY", "tag": "ema_cross"}]}
+    monkeypatch.setattr(signal_eval, "analyse", fake_analyse)
+    monkeypatch.setattr(signal_eval, "market_regime", lambda m, d: "RISK_ON")
+    monkeypatch.setattr(signal_eval, "q", lambda sql, **kw: [{"id": 1}])
+
+    assert signal_eval.snapshot_today() == 1
+    assert seen == ["SHUT_ONE"]        # the open one was never even analysed
+
+
+def test_snapshot_records_everything_when_all_venues_are_shut(monkeypatch):
+    from app.services import signal_eval
+
+    monkeypatch.setattr(signal_eval, "all_symbols",
+                        lambda: [{"symbol": "A", "market": "IN"},
+                                 {"symbol": "B", "market": "IN"}])
+    monkeypatch.setattr(signal_eval, "session_open", lambda s: False)
+    monkeypatch.setattr(signal_eval, "analyse", lambda s: {
+        "date": "2026-08-26", "close": 100.0, "atr": 2.0, "score": 4.0,
+        "signals": [{"type": "BUY", "tag": "ema_cross"}]})
+    monkeypatch.setattr(signal_eval, "market_regime", lambda m, d: "RISK_ON")
+    monkeypatch.setattr(signal_eval, "q", lambda sql, **kw: [{"id": 1}])
+
+    assert signal_eval.snapshot_today() == 2
