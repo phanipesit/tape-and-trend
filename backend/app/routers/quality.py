@@ -40,6 +40,10 @@ def quality_refresh(symbol: str):
 def quality_all(market: str | None = None, verdict: str | None = None):
     """Screen the cached universe. Reads cache only — never fetches, since a live pull
     per symbol across ~124 names is the multi-minute stall screener.py warns about."""
+    # P/E rides along deliberately. The seven tests contain no price data whatsoever,
+    # so a company can clear all of them and still be expensive. Showing the valuation
+    # the screen is blind to is what stops "passes" being read as "buy".
+    pe = {r["symbol"]: r["pe"] for r in q("SELECT symbol, pe FROM symbols")}
     out = []
     for s in all_symbols(market):
         rows = get_fundamentals_history(s["symbol"])
@@ -47,12 +51,15 @@ def quality_all(market: str | None = None, verdict: str | None = None):
             continue
         r = evaluate(s["symbol"], rows, sector_group(s.get("sector")))
         r["name"] = s.get("name")
+        r["market"] = s.get("market")
+        r["pe"] = float(pe[s["symbol"]]) if pe.get(s["symbol"]) is not None else None
         out.append(r)
     if verdict:
         out = [r for r in out if r["verdict"] == verdict]
-    # Cleanest first, then by how much of the screen could actually be scored — a
-    # company judged on 7 tests is a stronger pass than one judged on 3.
-    out.sort(key=lambda r: (len(r["failed"]), -r["scored"], r["symbol"]))
+    # Cleanest first, then strongest, then by how much of the screen could actually be
+    # scored — a company judged on 7 tests is a stronger pass than one judged on 3.
+    out.sort(key=lambda r: (len(r["failed"]), -(r["strength"] or 0), -r["scored"],
+                            r["symbol"]))
     return {"count": len(out), "market": market, "results": out}
 
 

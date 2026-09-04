@@ -41,14 +41,50 @@ EXEMPT_HIGH_ROE = 0.20
 FINANCIAL_GROUPS = {"Banks", "Financial Services"}
 
 
+# How many times over the threshold a check clears, capped so one spectacular metric
+# cannot carry a mediocre company. Hindustan Zinc's 68% ROE is 8.5x the 8% bar; without
+# a cap it would swamp six ordinary scores.
+HEADROOM_CAP = 3.0
+
+# Quartile bands, calibrated against the observed spread of companies that pass
+# (n=76, min 1.92, median 2.46, max 2.83). The first cut used 2.0/1.4/1.0 and awarded
+# an A to 74 of 76 — a grade almost everyone gets conveys nothing.
+#
+# These therefore RANK within the screened universe; they do not certify against an
+# absolute standard. An A means top quartile of companies that already passed all seven
+# tests, not "good company" in any wider sense.
+GRADE_BANDS = ((2.63, "A"), (2.46, "B"), (2.35, "C"))
+
+
+def _f(v):
+    """Postgres NUMERIC comes back as Decimal, which will not mix with the float
+    thresholds. Coerce once, here, rather than at every arithmetic site."""
+    return None if v is None else float(v)
+
+
 def _mean(vals):
-    vals = [v for v in vals if v is not None]
+    vals = [_f(v) for v in vals if v is not None]
     return sum(vals) / len(vals) if vals else None
+
+
+def _headroom(check, thresholds) -> float | None:
+    """Ratio of achieved to required, oriented so more is always better."""
+    t = thresholds.get(check["n"])
+    v = _f(check["value"])
+    if t is None or v is None or check["status"] not in ("pass", "fail"):
+        return None
+    lo, invert = t
+    if invert:                      # criterion 7: a lower share count growth is better
+        return min(max((lo - v) / lo + 1.0, 0.0), HEADROOM_CAP) if lo else None
+    if lo == 0:                     # criterion 2: FCF only has to be positive
+        return HEADROOM_CAP if v > 0 else 0.0
+    return min(max(v / lo, 0.0), HEADROOM_CAP)
 
 
 def _ratio(num, den):
     """None unless both sides are real and the denominator is usable. A zero
     denominator is undefined, not infinite, and must not become a pass or a fail."""
+    num, den = _f(num), _f(den)
     if num is None or den is None or den == 0:
         return None
     return num / den
@@ -151,9 +187,26 @@ def evaluate(symbol: str, rows: list[dict], sector_group: str | None = None) -> 
     else:
         verdict = "passes"
 
+    # Strength: how comfortably the tests were cleared, not whether to buy. The screen
+    # holds no price data at all, so it cannot speak to whether a company is worth its
+    # current quote — a business can clear all seven and still be expensive. Grades
+    # describe the accounts and nothing else.
+    thresholds = {1: (MIN_AVG_ROE, False), 2: (0, False), 3: (MIN_INTEREST_COVER, False),
+                  4: (MIN_GROSS_MARGIN, False), 5: (MIN_OCF_TO_NI, False),
+                  6: (MIN_NET_MARGIN, False), 7: (MAX_SHARE_GROWTH, True)}
+    heads = [h for h in (_headroom(c, thresholds) for c in checks) if h is not None]
+    strength = round(sum(heads) / len(heads), 2) if heads else None
+    grade = None
+    if strength is not None and verdict == "passes":
+        grade = next((g for lo, g in GRADE_BANDS if strength >= lo), "D")
+
+    for c in checks:
+        c["headroom"] = _headroom(c, thresholds)
+
     return {
         "symbol": symbol, "years": years,
         "sector_group": sector_group, "is_financial": is_financial,
+        "strength": strength, "grade": grade,
         "checks": checks, "failed": failed,
         "passed": len(scored) - len(failed), "scored": len(scored),
         "skipped": [c["n"] for c in checks if c["status"] == "skipped"],

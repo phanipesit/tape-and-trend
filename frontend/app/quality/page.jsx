@@ -35,6 +35,16 @@ function Row({ r, open, onToggle }) {
         <td className="text-center">
           <span className={`text-[10px] font-mono border rounded-full px-2 py-0.5 ${cls}`}>
             {label}</span></td>
+        <td className="text-center">
+          {r.grade
+            ? <span className="font-mono font-bold text-up" title={`strength ${r.strength} — top-quartile bands within companies that pass`}>{r.grade}</span>
+            : <span className="text-dim">—</span>}</td>
+        <td className="text-right font-mono text-dim">{r.strength ?? "—"}</td>
+        {/* Deliberately adjacent to the grade: the seven tests never look at price, so
+            a top grade on a 90x P/E is a good business, not a good purchase. */}
+        <td className={`text-right font-mono ${r.pe == null ? "text-dim"
+          : r.pe > 60 ? "text-down" : r.pe < 20 ? "text-up" : "text-mut"}`}>
+          {r.pe == null ? "—" : fmt(r.pe, 1)}</td>
         <td className="text-right font-mono">{r.passed}/{r.scored}</td>
         <td className="text-right font-mono text-dim">{r.years}y</td>
         <td className="text-center">
@@ -44,7 +54,7 @@ function Row({ r, open, onToggle }) {
         </td>
       </tr>
       {open && (
-        <tr><td colSpan={7} className="bg-panel2 px-4 py-3">
+        <tr><td colSpan={10} className="bg-panel2 px-4 py-3">
           <table className="w-full text-[11px]">
             <tbody>
               {r.checks.map((c) => (
@@ -117,6 +127,12 @@ export default function Quality() {
         there is no honest way to score it here. “Passes seven quality tests” is a
         defensible statement about a company&apos;s accounts. It is not a prediction, and
         nothing on this page has been shown to beat holding an index.
+        <br /><br />
+        <b className="text-txt">There is no buy rating here, on purpose.</b> The seven tests
+        contain <b>no price data at all</b>. A company can clear every one and still be a
+        poor purchase because it is expensive — which is why P/E sits next to the grade
+        rather than being folded into it. Grade ranks the accounts; price is a separate
+        question the screen cannot see.
       </div>
 
       {err && <div className="card border-down text-down text-sm">{err}</div>}
@@ -147,6 +163,9 @@ export default function Quality() {
           <table className="w-full"><thead><tr>
             <th className="text-left">SYMBOL</th><th className="text-left">NAME</th>
             <th className="text-left">SECTOR</th><th className="text-center">VERDICT</th>
+            <th className="text-center" title="Top-quartile bands within companies that pass — a ranking, not a certification">GRADE</th>
+            <th className="text-right" title="Mean headroom above each threshold, capped at 3×">STR</th>
+            <th className="text-right" title="Not part of the screen — shown because the seven tests are blind to price">P/E</th>
             <th className="text-right">PASSED</th><th className="text-right">YEARS</th>
             <th className="text-center">DATA</th>
           </tr></thead>

@@ -148,3 +148,44 @@ def test_years_is_reported_so_a_short_average_is_visible():
     r = run(good(n=4))
     assert r["years"] == 4
     assert "4y" in next(c["name"] for c in r["checks"] if c["n"] == 1)
+
+
+# ---------------------------------------------------------------- strength & grade
+
+def test_clearing_a_threshold_by_more_scores_higher():
+    weak = run(good(net_income=45.0, equity=500.0))     # ROE 9%, just over the 8% bar
+    strong = run(good(net_income=200.0, equity=500.0))  # ROE 40%
+    assert strong["strength"] > weak["strength"]
+
+
+def test_one_spectacular_metric_cannot_carry_a_company():
+    """Hindustan Zinc's 68% ROE is 8.5x the bar. Uncapped it would swamp six ordinary
+    scores and make the grade a single-metric ranking."""
+    absurd = run(good(net_income=5000.0, equity=100.0))
+    for c in absurd["checks"]:
+        if c["headroom"] is not None:
+            assert c["headroom"] <= quality.HEADROOM_CAP
+
+
+def test_share_growth_headroom_rewards_less_dilution():
+    """Criterion 7 is inverted — lower is better — so the headroom must be too."""
+    buyback = [year(2026, shares=900.0)] + [year(2025 - i) for i in range(3)]
+    flat = good()
+    h_buyback = next(c["headroom"] for c in run(buyback)["checks"] if c["n"] == 7)
+    h_flat = next(c["headroom"] for c in run(flat)["checks"] if c["n"] == 7)
+    assert h_buyback > h_flat
+
+
+def test_a_failing_company_gets_no_grade():
+    # Grading something the screen excluded would imply it is merely a weaker buy.
+    r = run(good(free_cf=-50.0))
+    assert r["verdict"] == "excluded" and r["grade"] is None
+
+
+def test_grades_actually_discriminate():
+    """Bands are quartiles of the passing set. The first attempt used 2.0/1.4/1.0 and
+    gave 74 of 76 companies an A."""
+    assert [g for _, g in quality.GRADE_BANDS] == ["A", "B", "C"]
+    lo = [t for t, _ in quality.GRADE_BANDS]
+    assert lo == sorted(lo, reverse=True)          # bands descend
+    assert lo[0] < quality.HEADROOM_CAP            # an A must be reachable
