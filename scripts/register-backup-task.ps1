@@ -18,12 +18,14 @@ if (-not (Test-Path $script)) { throw "no script at $script" }
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
 
-$triggers = @(
-    (New-ScheduledTaskTrigger -Daily -At 20:45),
-    (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
-)
-# Later than the snapshot's logon delay so the dump captures that run's writes.
-$triggers[1].Delay = "PT10M"
+# Repeating rather than at-logon — see register-snapshot-task.ps1 for why the logon
+# trigger never fired. Offset 20 minutes past the snapshot's slots so a dump captures
+# that run's writes rather than racing them.
+$trigger = New-ScheduledTaskTrigger -Daily -At 09:20
+$trigger.Repetition = (New-CimInstance -ClassName MSFT_TaskRepetitionPattern `
+    -Namespace Root/Microsoft/Windows/TaskScheduler -ClientOnly `
+    -Property @{ Interval = "PT3H"; Duration = "P1D"; StopAtDurationEnd = $false })
+$triggers = @($trigger)
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
     -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
@@ -33,5 +35,5 @@ $settings.MultipleInstances = 2   # 2 = IgnoreNew; not a param on PowerShell 5.1
 Register-ScheduledTask -TaskName "TapeTrendBackup" -Action $action `
     -Trigger $triggers -Settings $settings -Force | Out-Null
 
-Write-Output "Scheduled task 'TapeTrendBackup' registered: at logon (+10 min) and daily 20:45."
+Write-Output "Scheduled task 'TapeTrendBackup' registered: every 3h from 09:20."
 Write-Output "Remove with: Unregister-ScheduledTask -TaskName TapeTrendBackup -Confirm:`$false"

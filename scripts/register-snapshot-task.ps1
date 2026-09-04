@@ -28,14 +28,18 @@ if (-not (Test-Path $script)) { throw "no script at $script" }
 
 $action = New-ScheduledTaskAction -Execute $py -Argument "`"$script`""
 
-$triggers = @(
-    # Backstop. 20:30 is after the 15:30 NSE close, so bars are final.
-    (New-ScheduledTaskTrigger -Daily -At 20:30),
-    # Primary. The delay lets the network and Postgres come up before we hit them;
-    # without it a logon run races the service start and fails on connect.
-    (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
-)
-$triggers[1].Delay = "PT5M"
+# A repeating trigger, NOT at-logon. The logon attempt was wrong: this machine resumes
+# from hibernation with the user session intact, so no logon event occurs and the trigger
+# never fired once in nine days despite several resumes. Repetition depends on no logon
+# semantics at all — Task Scheduler simply runs it whenever the machine is on.
+#
+# Every 3 hours from 09:00. Extra runs are close to free: the snapshot is idempotent,
+# mid-session symbols are skipped, and the backup exits early if today's dump exists.
+$trigger = New-ScheduledTaskTrigger -Daily -At 09:00
+$trigger.Repetition = (New-CimInstance -ClassName MSFT_TaskRepetitionPattern `
+    -Namespace Root/Microsoft/Windows/TaskScheduler -ClientOnly `
+    -Property @{ Interval = "PT3H"; Duration = "P1D"; StopAtDurationEnd = $false })
+$triggers = @($trigger)
 
 # ExecutionTimeLimit was PT20M. A catch-up run does a 15-session backfill across the
 # whole universe before it even starts scoring, and being killed mid-write is worse than
@@ -50,6 +54,6 @@ $settings.MultipleInstances = 2   # 2 = IgnoreNew
 Register-ScheduledTask -TaskName "TapeTrendSnapshot" -Action $action `
     -Trigger $triggers -Settings $settings -Force | Out-Null
 
-Write-Output "Scheduled task 'TapeTrendSnapshot' registered: at logon (+5 min) and daily 20:30."
+Write-Output "Scheduled task 'TapeTrendSnapshot' registered: every 3h from 09:00."
 Write-Output "Log: C:\users\phani\claude_code\files\signal-tracker.log"
 Write-Output "Remove with: Unregister-ScheduledTask -TaskName TapeTrendSnapshot -Confirm:`$false"
