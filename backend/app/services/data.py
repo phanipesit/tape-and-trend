@@ -255,6 +255,82 @@ def refresh_intraday(symbol: str, interval: str = "5m") -> int:
             tuple(p for row in rows for p in row))
     return len(rows)
 
+_FUND_ROWS = {
+    # our column          yfinance row label, first match wins
+    "revenue":          ("Total Revenue",),
+    "gross_profit":     ("Gross Profit",),
+    "net_income":       ("Net Income", "Net Income Common Stockholders"),
+    "ebit":             ("EBIT", "Operating Income"),
+    "interest_expense": ("Interest Expense",),
+    "operating_cf":     ("Operating Cash Flow",),
+    "capex":            ("Capital Expenditure",),
+    "free_cf":          ("Free Cash Flow",),
+    "shares":           ("Ordinary Shares Number", "Share Issued"),
+    "equity":           ("Stockholders Equity",),
+}
+
+
+def _pick(frames, labels):
+    """First matching row across the statement frames, as {year: value}.
+
+    Returns {} when no frame carries the label — which is the common case for banks,
+    where Gross Profit and EBIT genuinely do not exist. That must stay distinct from
+    a reported zero: storing 0.0 for a bank's gross profit would fail it on a margin
+    test for a metric it does not report.
+    """
+    for df in frames:
+        if df is None or df.empty:
+            continue
+        for label in labels:
+            if label in df.index:
+                out = {}
+                for col, val in df.loc[label].items():
+                    if val is not None and val == val:      # not NaN
+                        out[int(str(col)[:4])] = float(val)
+                return out
+    return {}
+
+
+def refresh_fundamentals_history(symbol: str) -> int:
+    """Pull annual statements and store one row per fiscal year.
+
+    Free yfinance gives 4-5 years for Indian listings, not the 10 the quality screen
+    would prefer for its average-ROE test. That shortfall is real and is surfaced to
+    the caller as `years`, rather than silently averaging over whatever turned up.
+    """
+    meta = get_symbol(symbol)
+    ysym = yf_symbol(symbol, meta["market"])
+    with YF_LOCK:
+        t = yf.Ticker(ysym)
+        income, cash, bal = t.income_stmt, t.cashflow, t.balance_sheet
+
+    frames = {"income": [income], "cash": [cash], "bal": [bal], "any": [income, cash, bal]}
+    series = {col: _pick(frames["any"], labels) for col, labels in _FUND_ROWS.items()}
+    years = sorted({y for s in series.values() for y in s}, reverse=True)
+    if not years:
+        return 0
+
+    cols = list(_FUND_ROWS)
+    rows = [tuple([symbol, y] + [series[c].get(y) for c in cols]) for y in years]
+    with engine.begin() as cx:
+        cx.exec_driver_sql(
+            f"INSERT INTO fundamentals_history (symbol, fiscal_year, {','.join(cols)}) VALUES "
+            + ",".join(["(" + ",".join(["%s"] * (len(cols) + 2)) + ")"] * len(rows))
+            + " ON CONFLICT (symbol, fiscal_year) DO UPDATE SET "
+            + ",".join(f"{c}=EXCLUDED.{c}" for c in cols)
+            + ", fetched_at=now()",
+            tuple(p for row in rows for p in row))
+    return len(rows)
+
+
+def get_fundamentals_history(symbol: str) -> list[dict]:
+    """Cached annual statements, newest first. Never fetches — the quality screen runs
+    over a whole universe, and a live pull per symbol is the multi-minute stall
+    routers/screener.py warns about."""
+    return q("""SELECT * FROM fundamentals_history WHERE symbol=:s
+                ORDER BY fiscal_year DESC""", s=symbol)
+
+
 def get_intraday(symbol: str, interval: str = "5m", limit: int = 500, auto: bool = True) -> pd.DataFrame:
     if auto and not _intraday_cache_fresh(symbol, interval):
         try:

@@ -8,7 +8,7 @@ from .config import CORS_ORIGINS
 from .routers import (quotes, candles, screener, signals, backtest,
                       portfolio, news, alerts, symbols_admin, sectors, ai,
                       performance, rotation, intraday, options, markets, heatmap,
-                      flows)
+                      flows, quality)
 from .services.alerts_check import check_all
 from .services.signal_eval import snapshot_today, evaluate_open
 from .db import q
@@ -17,14 +17,14 @@ log = logging.getLogger(__name__)
 
 ROUTERS = (quotes, candles, screener, signals, backtest, portfolio, news, alerts,
            symbols_admin, sectors, ai, performance, rotation, intraday, options, markets,
-           heatmap, flows)
+           heatmap, flows, quality)
 
 # Every table a feature reads. This check exists to catch a migration that was never
 # run (see db/migration_004's header), so it has to cover the newest tables too —
 # an entry missing here is a silent failure inside feature code at request time.
 TABLES = ("symbols", "ohlcv", "intraday_ohlcv", "watchlist", "portfolio_tx",
           "backtest_runs", "alerts", "signal_outcomes", "rotation_runs", "option_chain",
-          "institutional_flows")   # signal_outcomes.regime added by migration_012
+          "institutional_flows", "fundamentals_history")   # regime col: migration_012
 
 
 def _check_tables():
