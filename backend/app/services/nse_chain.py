@@ -138,6 +138,12 @@ def refresh_chain(symbol: str, expiry: date | None = None) -> int:
                   iv=EXCLUDED.iv, ltp=EXCLUDED.ltp, oi=EXCLUDED.oi, volume=EXCLUDED.volume,
                   spot=EXCLUDED.spot, fetched_at=EXCLUDED.fetched_at""",
             tuple(p for row in out for p in row))
+    # Prune dead contracts while we are here. They are pure noise: 436 of 672 cached
+    # rows were expired before this was added, and every one is a frozen snapshot from
+    # a contract's last trading day.
+    with engine.begin() as cx:
+        cx.exec_driver_sql(
+            "DELETE FROM option_chain WHERE symbol=%s AND expiry < CURRENT_DATE", (symbol,))
     log.info("option chain %s %s: %d rows", symbol, chosen, len(out))
     return len(out)
 
@@ -152,8 +158,12 @@ def _cache_fresh(symbol: str, want: date | None = None) -> bool:
     """Fresh means recently fetched *and*, when a horizon is given, holding an expiry
     near it — otherwise a cached front-month chain would satisfy a 90-day request
     forever and every long-dated strategy would price off the wrong contract."""
+    # Expired expiries are excluded here too. Left in, one sitting within the tolerance
+    # window would report the cache as fresh and suppress the refetch that would bring
+    # in a live contract — implied_vol then finds nothing usable and silently falls back
+    # to realized vol.
     rows = q("""SELECT expiry, max(fetched_at) f FROM option_chain
-                WHERE symbol=:s GROUP BY expiry""", s=symbol)
+                WHERE symbol=:s AND expiry >= CURRENT_DATE GROUP BY expiry""", s=symbol)
     if not rows:
         return False
     if want is not None:
@@ -199,8 +209,14 @@ def implied_vol(symbol: str, strike: float, kind: str, days: int = 30,
     opt_type = "CE" if kind == "call" else "PE"
     today = date.today()
     wanted = today + timedelta(days=max(days, 0))
+    # Expired contracts must be excluded, not merely deprioritised. Their IV is a frozen
+    # snapshot from the contract's final trading day, and "nearest to the horizon" will
+    # happily choose one: a 7-day request with a contract that died 5 days ago and a live
+    # one 25 days out picks the dead contract, 12 days away instead of 18. The cache
+    # holds 436 such rows today, because nothing prunes them.
     rows = [r for r in get_chain(symbol, auto=auto, want=wanted)
-            if r["opt_type"] == opt_type and r["iv"] is not None]
+            if r["opt_type"] == opt_type and r["iv"] is not None
+            and r["expiry"] >= today]
     if not rows:
         return None
 

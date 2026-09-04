@@ -82,3 +82,32 @@ def test_venue_clock_failure_does_not_break_reads(monkeypatch):
     monkeypatch.setattr(data, "_venue_of", lambda s: "NSE")
     monkeypatch.setattr(data, "venue_state", boom)
     assert data.session_open("X") is False
+
+
+# ---------------------------------------------------------------- phantom bars
+
+def test_flat_volumeless_bars_are_dropped():
+    """Yahoo emits a bar for market holidays carrying the previous close forward at zero
+    volume. Its true range is zero, which drags ATR down and tightens every stop and
+    target derived from it."""
+    import pandas as pd
+    df = pd.DataFrame({"o": [100.0, 101.0, 101.0], "h": [102.0, 103.0, 101.0],
+                       "l": [99.0, 100.0, 101.0], "c": [101.0, 102.0, 101.0],
+                       "v": [1000, 1200, 0]})
+    assert list(data._phantom(df)) == [False, False, True]
+
+
+def test_an_index_with_zero_volume_but_a_real_range_is_kept():
+    """^VIX and DX-Y.NYB report zero volume throughout. Dropping on volume alone would
+    delete their entire history."""
+    import pandas as pd
+    df = pd.DataFrame({"o": [16.0], "h": [17.2], "l": [15.8], "c": [16.5], "v": [0]})
+    assert list(data._phantom(df)) == [False]
+
+
+def test_a_circuit_locked_stock_is_kept():
+    """Flat OHLC but it traded — volume is what separates a locked stock from a closed
+    market."""
+    import pandas as pd
+    df = pd.DataFrame({"o": [50.0], "h": [50.0], "l": [50.0], "c": [50.0], "v": [900000]})
+    assert list(data._phantom(df)) == [False]

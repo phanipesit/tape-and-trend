@@ -168,6 +168,28 @@ def _recent_fetch(symbol: str) -> bool:
     at = _last_fetch.get(symbol)
     return at is not None and datetime.now(timezone.utc) - at < timedelta(hours=CANDLE_STALE_HOURS)
 
+def _phantom(df: pd.DataFrame) -> pd.Series:
+    """Bars for sessions that never happened.
+
+    Yahoo does not omit market holidays — it emits a bar carrying the previous close
+    forward with zero volume. Every one of the 524 such bars found in the cache was
+    perfectly flat (o=h=l=c) and repeated the prior close exactly, on about five dates
+    where all 106 Indian symbols were affected at once. US symbols show the identical
+    pattern on US holidays.
+
+    They are not cosmetic. A flat bar has a true range of zero, so it drags ATR down and
+    makes every stop and target derived from it tighter than the real volatility
+    warrants. It also pulls vol20 down, which inflates RVOL for the following twenty
+    sessions and can fire volume-gated breakout rules that should not have triggered.
+
+    Zero volume alone is not the test: indices legitimately report none (^VIX and
+    DX-Y.NYB are zero throughout) while still having a real high-low range. A bar that
+    is both flat and volumeless is the signature of a closed session. A stock locked at
+    a circuit limit is flat too, but trades — so the volume condition keeps it.
+    """
+    return (df["v"].fillna(0) == 0) & (df["o"] == df["h"]) & (df["h"] == df["l"])         & (df["l"] == df["c"])
+
+
 def refresh_candles(symbol: str, period: str = "2y") -> int:
     meta = get_symbol(symbol)
     ysym = yf_symbol(symbol, meta["market"])
@@ -189,6 +211,7 @@ def refresh_candles(symbol: str, period: str = "2y") -> int:
         df.columns = df.columns.get_level_values(0)
     df = df.rename(columns={"Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"})
     df = df[["o", "h", "l", "c", "v"]].dropna()
+    df = df[~_phantom(df)]
     rows = [(symbol, d.date(), float(r.o), float(r.h), float(r.l), float(r.c), int(r.v or 0))
             for d, r in df.iterrows()]
     with engine.begin() as cx:

@@ -160,3 +160,38 @@ def test_implied_vol_asks_for_the_horizon_it_needs(monkeypatch):
     monkeypatch.setattr(nse_chain, "get_chain", fake_get_chain)
     nse_chain.implied_vol("^NSEI", 24500, "call", days=90)
     assert seen["want"] == date.today() + timedelta(days=90)
+
+
+# ---------------------------------------------------------------- expired contracts
+
+PAST = date.today() - timedelta(days=5)
+
+
+def test_expired_contracts_are_never_selected(monkeypatch):
+    """An expired contract's IV is frozen at its final trading day. "Nearest to the
+    horizon" will pick one otherwise: asked for 7 days, a contract that died 5 days ago
+    is 12 days away and a live one 25 days out is 18 — the dead one wins."""
+    rows = [row(PAST, 24500, "CE", 99.0), row(date.today() + timedelta(days=25), 24500, "CE", 12.0)]
+    monkeypatch.setattr(nse_chain, "get_chain", lambda s, expiry=None, auto=True, want=None: rows)
+    iv = nse_chain.implied_vol("^NSEI", 24500, "call", days=7)
+    assert iv["expiry"] == str(date.today() + timedelta(days=25))
+    assert iv["iv_pct"] == 12.0
+
+
+def test_only_expired_contracts_means_no_iv_not_a_stale_one(monkeypatch):
+    # Falling back to realized vol is correct here; quoting a dead contract is not.
+    monkeypatch.setattr(nse_chain, "get_chain",
+                        lambda s, expiry=None, auto=True, want=None: [row(PAST, 24500, "CE", 99.0)])
+    assert nse_chain.implied_vol("^NSEI", 24500, "call", days=7) is None
+
+
+def test_expired_rows_do_not_make_the_cache_look_fresh(monkeypatch):
+    """The SQL filters expiry >= CURRENT_DATE, so an expired row cannot satisfy the
+    freshness check and suppress a refetch."""
+    seen = {}
+    def fake_q(sql, **kw):
+        seen["sql"] = sql
+        return []
+    monkeypatch.setattr(nse_chain, "q", fake_q)
+    assert nse_chain._cache_fresh("^NSEI", want=date.today()) is False
+    assert "CURRENT_DATE" in seen["sql"]
