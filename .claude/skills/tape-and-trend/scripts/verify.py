@@ -119,6 +119,80 @@ def check_routers_registered() -> None:
         record(PASS, "ROUTERS tuple", f"all {len(on_disk)} routers mounted")
 
 
+def check_server_is_the_source() -> None:
+    """Is the process answering on :8000 actually running THIS checkout's code?
+
+    Everything above validates the source. Twice in one session the source was correct
+    and the running server was not: a second uvicorn, started earlier under the Anaconda
+    interpreter rather than backend/.venv, held port 8000, so a restart bound to nothing
+    and the API kept serving old code. check_routers_registered() reported "all routers
+    mounted" throughout, because it reads main.py rather than asking the server.
+
+    A verifier that cannot tell those two states apart is worse than none — it supplies
+    confidence without evidence.
+    """
+    print("\nRunning server")
+    if not listening(8000):
+        record(SKIP, "server identity", "api not running")
+        return
+
+    # Count process *trees*, not processes. `uvicorn --reload` runs a parent reloader
+    # and re-execs a worker child, so a healthy single server always shows two entries
+    # — and the child reports the venv python's Anaconda base as its executable, which
+    # also looks foreign. Counting raw processes flagged a perfectly good setup on the
+    # first run of this check. A check that fires on a healthy machine gets ignored, so
+    # only roots (a uvicorn whose parent is not itself uvicorn) count as servers.
+    try:
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+             "Where-Object { $_.CommandLine -match 'uvicorn' } | "
+             "ForEach-Object { \"$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)\" }"],
+            capture_output=True, text=True, timeout=30)
+        procs = [l.split("|", 2) for l in out.stdout.splitlines() if l.count("|") >= 2]
+    except Exception as e:
+        record(SKIP, "server identity", f"could not enumerate processes: {e}")
+        return
+
+    pids = {p[0] for p in procs}
+    roots = [p for p in procs if p[1] not in pids]
+    if len(roots) > 1:
+        record(FAIL, "single server",
+               f"{len(roots)} independent uvicorn trees — one may hold :8000 while your "
+               f"restarts bind to nothing. Kill all, start one.")
+    else:
+        record(PASS, "single server", f"{len(procs)} process(es), 1 tree")
+
+    # Match the `.venv` marker rather than an absolute path: the root is launched after
+    # a `cd` into backend/, so its command line carries the relative
+    # `.venv\Scripts\python.exe` and an absolute comparison never matches.
+    if roots and not any(".venv" in r[2].lower() for r in roots):
+        record(FAIL, "venv interpreter",
+               "the uvicorn root is not backend/.venv — it may not see this checkout's "
+               "dependencies. (The reload worker legitimately reports the venv's base "
+               "interpreter, so only the root is checked.)")
+    elif roots:
+        record(PASS, "venv interpreter")
+
+    # Route-count sanity. Not exact — path params and multi-method routes make the
+    # mapping loose — but a live server materially behind the source shows up here.
+    declared = sum(len(re.findall(r"@router\.(get|post|put|delete|patch)\(",
+                                  f.read_text(encoding="utf-8")))
+                   for f in (BACKEND / "app" / "routers").glob("*.py"))
+    status, body = fetch(f"{API}/openapi.json")
+    if status == 200:
+        try:
+            live = sum(len(v) for v in json.loads(body).get("paths", {}).values())
+        except json.JSONDecodeError:
+            live = -1
+        if live < declared:
+            record(FAIL, "server matches source",
+                   f"{live} live operations vs {declared} declared — the running server "
+                   f"is behind this checkout. Restart it.")
+        else:
+            record(PASS, "server matches source", f"{live} live / {declared} declared")
+
+
 def check_frontend() -> None:
     print("\nFrontend routes (localhost:3000)")
     if not listening(3000):
@@ -147,6 +221,7 @@ def main() -> int:
         run_tests()
     check_routers_registered()
     check_backend()
+    check_server_is_the_source()
     check_frontend()
 
     failed = [r for r in results if r[0] == FAIL]
