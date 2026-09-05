@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, fmt } from "../../lib/api";
 
@@ -27,7 +28,7 @@ function Row({ r, open, onToggle }) {
   const [label, cls] = VERDICT[r.verdict] || VERDICT["no data"];
   return (
     <>
-      <tr className="cursor-pointer hover:bg-panel2" onClick={onToggle}>
+      <tr id={`q-${r.symbol}`} className="cursor-pointer hover:bg-panel2" onClick={onToggle}>
         <td className="font-mono font-bold">
           <span className="text-dim mr-1">{open ? "▾" : "▸"}</span>{r.symbol}</td>
         <td className="text-mut truncate max-w-[13rem]">{r.name}</td>
@@ -77,12 +78,23 @@ function Row({ r, open, onToggle }) {
   );
 }
 
-export default function Quality() {
+function QualityInner() {
+  // The screener's quality badge links here with ?symbol=. Default to All markets and
+  // no verdict filter in that case: the requested company may well be a US listing or
+  // an excluded one, and landing on a page that does not contain it is worse than
+  // ignoring the parameter would have been.
+  const want = useSearchParams().get("symbol");
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
-  const [market, setMarket] = useState("IN");
+  const [market, setMarket] = useState(want ? "" : "IN");
   const [filter, setFilter] = useState("");
-  const [open, setOpen] = useState(null);
+  const [open, setOpen] = useState(want);
+
+  // Open its checks and scroll to them, rather than dropping the reader at the top of a
+  // hundred-row table to find the row themselves.
+  useEffect(() => {
+    if (want && d) document.getElementById(`q-${want}`)?.scrollIntoView({ block: "center" });
+  }, [want, d]);
 
   useEffect(() => {
     setD(null); setErr("");
@@ -184,4 +196,8 @@ export default function Quality() {
       </p>
     </div>
   );
+}
+
+export default function Quality() {
+  return <Suspense><QualityInner /></Suspense>;
 }

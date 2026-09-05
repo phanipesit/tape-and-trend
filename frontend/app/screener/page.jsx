@@ -3,8 +3,24 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { api, fmt } from "../../lib/api";
 
+// Same palette as /quality. The two pages now show the same verdict, and a word that
+// means "excluded" on one page must not be a different colour on the other.
+const VERDICT_CLS = {
+  passes: "border-up text-up",
+  review: "border-brass text-brass",
+  excluded: "border-down text-down",
+};
+
+function qualityTitle(q) {
+  const bits = [q.verdict];
+  if (q.grade) bits.push(`grade ${q.grade} (strength ${q.strength})`);
+  bits.push(`${q.years}y of statements`);
+  if (q.confidence === "low") bits.push("low confidence — thin history or few scorable tests");
+  return bits.join(" · ");
+}
+
 export default function Screener() {
-  const [f, setF] = useState({ max_pe: 60, min_roe: 0, max_de: 5, rsi_lo: 0, rsi_hi: 100, min_rvol: 0, above_ema50: false, market: "" });
+  const [f, setF] = useState({ max_pe: 60, min_roe: 0, max_de: 5, rsi_lo: 0, rsi_hi: 100, min_rvol: 0, above_ema50: false, market: "", quality: "", min_grade: "" });
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -63,6 +79,10 @@ export default function Screener() {
         <label className="flex flex-col gap-1 text-mut">RSI ≤<input type="number" className="w-16" value={f.rsi_hi} onChange={set("rsi_hi")} /></label>
         <label className="flex flex-col gap-1 text-mut">Min RVOL<input type="number" step="0.1" className="w-16" value={f.min_rvol} onChange={set("min_rvol")} /></label>
         <label className="flex items-center gap-2 text-mut pb-1"><input type="checkbox" checked={f.above_ema50} onChange={set("above_ema50")} />Above EMA50</label>
+        <label className="flex flex-col gap-1 text-mut" title="Seven accounting tests from /quality. Symbols with no cached statements drop out when this is set — they cannot be said to pass or fail.">Quality
+          <select value={f.quality} onChange={set("quality")}><option value="">Any</option><option value="passes">Passes</option><option value="review">Review</option><option value="excluded">Excluded</option></select></label>
+        <label className="flex flex-col gap-1 text-mut" title="Only companies that pass carry a grade, so this implies Passes. Bands rank within the screened universe rather than certifying against an absolute standard.">Min grade
+          <select value={f.min_grade} onChange={set("min_grade")}><option value="">Any</option><option value="A">A</option><option value="B">B or better</option><option value="C">C or better</option><option value="D">D or better</option></select></label>
         <button className="ghost" disabled={refreshStatus?.running} onClick={refreshAll}>
           {refreshStatus?.running ? `↻ Refreshing… ${refreshStatus.done}/${refreshStatus.total}` : "↻ Refresh all fundamentals"}
         </button>
@@ -75,7 +95,7 @@ export default function Screener() {
       )}
       <div className="card overflow-x-auto">
         <table className="w-full"><thead><tr>
-          <th>SYMBOL</th><th>SECTOR</th><th>LAST</th><th>P/E</th><th>ROE%</th><th>D/E</th><th>RSI</th><th>RVOL</th><th>TREND</th><th>SCORE</th><th></th>
+          <th>SYMBOL</th><th>SECTOR</th><th>LAST</th><th>P/E</th><th>ROE%</th><th>D/E</th><th>RSI</th><th>RVOL</th><th>TREND</th><th className="text-center" title="Verdict from the seven-test quality screen; the letter is the grade where one was awarded">QUALITY</th><th>SCORE</th><th></th>
         </tr></thead><tbody>
           {rows.map((r) => (
             <tr key={r.symbol}>
@@ -87,6 +107,15 @@ export default function Screener() {
               <td className={r.rsi < 32 ? "text-up" : r.rsi > 72 ? "text-down" : ""}>{fmt(r.rsi, 0)}</td>
               <td className={r.rvol >= 1.5 ? "text-brass" : ""}>{fmt(r.rvol, 2)}</td>
               <td className={r.trend === "UP" ? "text-up" : "text-down"}>{r.trend}</td>
+              {/* Grade when there is one, the verdict word otherwise — "excluded" is the
+                  useful thing to read, and a company that failed never gets a letter. */}
+              <td className="text-center">
+                {r.quality
+                  ? <Link href={`/quality?symbol=${r.symbol}`} title={qualityTitle(r.quality)}
+                      className={`text-[10px] font-mono border rounded-full px-2 py-0.5 ${VERDICT_CLS[r.quality.verdict] || "border-line2 text-dim"}`}>
+                      {r.quality.grade || r.quality.verdict}</Link>
+                  : <span className="text-dim" title="No cached statements — run ↻ Refresh all on the Quality page">—</span>}
+              </td>
               <td className="text-brass">{fmt(r.score, 1)}</td>
               <td className="flex gap-1 text-xs">
                 <button className="ghost !px-2 !py-0.5" title={watched.has(r.symbol) ? "Remove from watchlist" : "Add to watchlist"}
@@ -96,9 +125,9 @@ export default function Screener() {
                 <Link className="ghost !px-2 !py-0.5" title="Backtest this" href={`/backtest?symbol=${r.symbol}`}>📊</Link>
               </td>
             </tr>))}
-          {loading && rows.length === 0 && <tr><td colSpan={11} className="text-dim">Scanning the universe… (first run can take a while while candles warm up)</td></tr>}
-          {err && !loading && <tr><td colSpan={11} className="text-down">Screener request failed — is the backend running on :8000? {err} <button className="ghost !px-2 !py-0.5 ml-2" onClick={run}>Retry</button></td></tr>}
-          {!loading && !err && rows.length === 0 && <tr><td colSpan={11} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
+          {loading && rows.length === 0 && <tr><td colSpan={12} className="text-dim">Scanning the universe… (first run can take a while while candles warm up)</td></tr>}
+          {err && !loading && <tr><td colSpan={12} className="text-down">Screener request failed — is the backend running on :8000? {err} <button className="ghost !px-2 !py-0.5 ml-2" onClick={run}>Retry</button></td></tr>}
+          {!loading && !err && rows.length === 0 && <tr><td colSpan={12} className="text-dim">Nothing passes these filters — loosen one, or refresh fundamentals first.</td></tr>}
         </tbody></table>
       </div>
     </div>

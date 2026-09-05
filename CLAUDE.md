@@ -277,6 +277,28 @@ against the underlying's mechanical signals). Both must treat `direction` defaul
 with an empty `mechanical_signals` as "no signal fired," never as a real bullish read — see the
 `SYSTEM_OPTIONS` prompt and `_rule_based`'s strategy branch for why.
 
+**Quality screen** (`services/quality.py`) is seven accounting tests that *exclude*
+companies, adapted from ai-berkshire (MIT). It is deliberately the one feature here that
+reports no expectancy: swing outcomes resolve in 10-20 bars and can be scored, quality
+investing resolves over years, and the cache holds two — so it is a lens, not a measured
+edge, and the page says so where it will be read. `evaluate()` is pure (rows in, verdict
+out) and must stay that way; `screen()` is the universe-wide version and takes the
+statements and the sector-group map as arguments rather than reaching for the database
+itself. A missing input is always *skipped*, never failed, because the methodology's own
+principle is that letting a weak company through beats wrongly excluding a strong one.
+
+**Quality is joined into `/api/screener`**, which is where the actually interesting
+question lives: "which companies pass all seven tests *and* have a signal firing today"
+previously needed two tabs and a manual cross-reference. The two screens answer different
+halves of it and neither is a buy rating — the accounts are blind to price, and the tape
+is blind to the accounts. `quality` filters on the verdict and `min_grade` on the letter;
+both drop symbols with no cached statements, since an unfetched company cannot be said to
+pass or fail, while unfiltered rows keep `quality: null` so the absence stays visible. The
+statements arrive from `data.get_fundamentals_history_all()` — **one** query for the whole
+universe. The per-symbol reader in a loop was already ~124 round trips on the quality page
+and joining it into the screener would have doubled that; the table holds five rows per
+company, so fetching it whole and grouping in Python is strictly cheaper.
+
 **Market heatmap** (`services/heatmap.py` + `frontend/lib/treemap.js`) is the treemap view of
 the equity universe — tile area is activity, colour is the day's move. It reads cached candles
 only, like `sectors.py`/`rotation.py`/`markets.py`, and pulls the last two bars for every symbol

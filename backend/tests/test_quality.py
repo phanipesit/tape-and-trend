@@ -189,3 +189,48 @@ def test_grades_actually_discriminate():
     lo = [t for t, _ in quality.GRADE_BANDS]
     assert lo == sorted(lo, reverse=True)          # bands descend
     assert lo[0] < quality.HEADROOM_CAP            # an A must be reachable
+
+
+# ------------------------------------------------- screen(): the universe-wide join
+
+def test_screen_skips_symbols_with_no_statements():
+    """Absent, not present-with-a-null-verdict. The screener has to be able to tell
+    'this company fails the tests' from 'nobody ever fetched its statements'."""
+    syms = [{"symbol": "A"}, {"symbol": "B"}]
+    out = quality.screen(syms, {"A": good()}, {})
+    assert set(out) == {"A"}
+
+
+def test_screen_applies_the_sector_exemptions():
+    """A bank must be recognised as one here too. Routed without its sector group it
+    would be judged on gross margin, which is the exact HDFCBANK failure the module
+    exists to avoid."""
+    banky = good(gross_profit=None, net_income=10.0, revenue=1000.0)
+    syms = [{"symbol": "BANK"}]
+    plain = quality.screen(syms, {"BANK": banky}, {})["BANK"]
+    bank = quality.screen(syms, {"BANK": banky}, {"BANK": "Banks"})["BANK"]
+    assert bank["is_financial"] and not plain["is_financial"]
+    assert 6 in plain["failed"] and 6 not in bank["failed"]
+
+
+def test_screen_preserves_universe_order():
+    syms = [{"symbol": s} for s in ("Z", "M", "A")]
+    hist = {s["symbol"]: good() for s in syms}
+    assert list(quality.screen(syms, hist, {})) == ["Z", "M", "A"]
+
+
+def test_summary_drops_the_checks():
+    """The screener shows one row per symbol; seven nested objects each would be
+    unreadable and would triple the payload."""
+    s = quality.summary(run(good()))
+    assert set(s) == {"verdict", "grade", "strength", "years", "confidence"}
+    assert s["verdict"] == "passes"
+
+
+def test_grade_order_is_best_first():
+    """min_grade filters with `>` against this, so A must be the smallest number and
+    every band in GRADE_BANDS must be orderable."""
+    assert quality.GRADE_ORDER["A"] == 0
+    order = [quality.GRADE_ORDER[g] for _, g in quality.GRADE_BANDS]
+    assert order == sorted(order)
+    assert set(g for _, g in quality.GRADE_BANDS) | {"D"} == set(quality.GRADE_ORDER)

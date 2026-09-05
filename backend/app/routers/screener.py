@@ -1,5 +1,8 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from ..services.data import all_symbols, refresh_fundamentals
+from ..services.data import (all_symbols, get_fundamentals_history_all,
+                             refresh_fundamentals)
+from ..services.quality import GRADE_ORDER, screen, summary
+from ..services.sectors import sector_group
 from ..services.signals import analyse
 import time
 router = APIRouter(prefix="/api", tags=["screener"])
@@ -12,9 +15,34 @@ _refresh_state = {"running": False, "done": 0, "total": 0, "errors": {}}
 @router.get("/screener")
 def screener(market: str | None = None, max_pe: float = 1e9, min_roe: float = -1e9,
              max_de: float = 1e9, rsi_lo: float = 0, rsi_hi: float = 100,
-             above_ema50: bool = False, min_rvol: float = 0):
+             above_ema50: bool = False, min_rvol: float = 0,
+             quality: str | None = None, min_grade: str | None = None):
+    """Mechanical signals and fundamentals over the universe, now with the quality
+    verdict alongside.
+
+    Quality is joined here rather than left on its own page because the question that
+    needed two tabs and a manual cross-reference — "which companies pass all seven
+    accounting tests *and* have a signal firing today" — is the one worth asking. The
+    two screens answer different halves of it: quality says whether the business is
+    sound over years, `analyse()` says whether the tape is doing something this week.
+    Neither is a buy signal; the join is just what makes both visible at once.
+
+    `quality` filters on the verdict (passes / review / excluded) and `min_grade` on
+    the letter, A being best. Both **exclude symbols with no cached statements**, since
+    an unfetched company cannot be said to pass or fail; unfiltered, those rows are
+    still returned with `quality: null` so the absence is visible rather than silent.
+    """
+    syms = all_symbols(market)
+    # One query for the whole universe's statements, before the loop. Called per symbol
+    # inside it this would add ~124 round trips to a request that already runs analyse()
+    # that many times.
+    history = get_fundamentals_history_all([s["symbol"] for s in syms])
+    sector_of = {s["symbol"]: sector_group(s.get("sector")) for s in syms}
+    quality_of = screen(syms, history, sector_of)
+    floor = GRADE_ORDER.get((min_grade or "").upper())
+
     out = []
-    for s in all_symbols(market):
+    for s in syms:
         a = analyse(s["symbol"])
         if "error" in a:
             continue
@@ -25,8 +53,15 @@ def screener(market: str | None = None, max_pe: float = 1e9, min_roe: float = -1
         if not (rsi_lo <= (a["rsi"] or 50) <= rsi_hi): continue
         if above_ema50 and a["close"] <= a["ema50"]: continue
         if a["rvol"] < min_rvol: continue
+        qr = quality_of.get(s["symbol"])
+        if quality and (qr is None or qr["verdict"] != quality): continue
+        # Only a "passes" verdict carries a grade, so min_grade implies the verdict
+        # without having to be combined with it.
+        if floor is not None and (qr is None or qr["grade"] is None
+                                  or GRADE_ORDER[qr["grade"]] > floor): continue
         out.append({**s, **{k: a[k] for k in ("close", "rsi", "trend", "rvol", "score")},
-                    "mcap": float(s["mcap"]) if s.get("mcap") else None})
+                    "mcap": float(s["mcap"]) if s.get("mcap") else None,
+                    "quality": summary(qr) if qr else None})
     return sorted(out, key=lambda r: -r["score"])
 
 @router.post("/fundamentals/{symbol}/refresh")

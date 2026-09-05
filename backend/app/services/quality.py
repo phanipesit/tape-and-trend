@@ -216,3 +216,42 @@ def evaluate(symbol: str, rows: list[dict], sector_group: str | None = None) -> 
         # seven, and the caller must be able to tell the difference.
         "confidence": "low" if len(scored) < 5 or years < 4 else "normal",
     }
+
+
+# Grades are ordinal, so a "B or better" filter needs the ordering spelled out. D is the
+# floor rather than a band in GRADE_BANDS, hence its absence there and presence here.
+GRADE_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3}
+
+
+def summary(result: dict) -> dict:
+    """The subset of a verdict another feature needs when quality is a column rather
+    than the page. Deliberately drops the seven checks: the screener shows a row per
+    symbol, and seven nested objects each would be unreadable and would triple the
+    payload. `/api/quality/{symbol}` remains the place to see why."""
+    return {k: result.get(k) for k in
+            ("verdict", "grade", "strength", "years", "confidence")}
+
+
+def screen(symbols: list[dict], history: dict[str, list[dict]],
+           sector_of: dict[str, str | None]) -> dict[str, dict]:
+    """evaluate() across a universe, keyed by symbol.
+
+    Pure in the same way evaluate() is: the caller supplies the statements and the
+    sector-group map, so this module still touches no database. The statements are
+    expected to arrive from one batched query, not one per symbol — the quality page
+    was issuing ~124 of those per render, and the screener would have doubled it.
+
+    A symbol with no cached statements is **absent** from the result rather than
+    present with a null verdict. Callers must be able to tell "this company fails the
+    screen" from "nobody has ever fetched its statements", and evaluate() already
+    reports the latter as the verdict "no data" — but only if you call it, which is
+    exactly what we skip here.
+    """
+    out = {}
+    for s in symbols:
+        sym = s["symbol"]
+        rows = history.get(sym)
+        if not rows:
+            continue
+        out[sym] = evaluate(sym, rows, sector_of.get(sym))
+    return out

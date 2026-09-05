@@ -4,8 +4,9 @@ from fastapi import APIRouter, HTTPException
 
 from ..db import q
 from ..services.data import (all_symbols, get_fundamentals_history,
+                             get_fundamentals_history_all,
                              refresh_fundamentals_history)
-from ..services.quality import evaluate
+from ..services.quality import evaluate, screen
 from ..services.sectors import sector_group
 
 log = logging.getLogger(__name__)
@@ -44,15 +45,15 @@ def quality_all(market: str | None = None, verdict: str | None = None):
     # so a company can clear all of them and still be expensive. Showing the valuation
     # the screen is blind to is what stops "passes" being read as "buy".
     pe = {r["symbol"]: r["pe"] for r in q("SELECT symbol, pe FROM symbols")}
+    syms = all_symbols(market)
+    history = get_fundamentals_history_all([s["symbol"] for s in syms])
+    sector_of = {s["symbol"]: sector_group(s.get("sector")) for s in syms}
+    meta = {s["symbol"]: s for s in syms}
     out = []
-    for s in all_symbols(market):
-        rows = get_fundamentals_history(s["symbol"])
-        if not rows:
-            continue
-        r = evaluate(s["symbol"], rows, sector_group(s.get("sector")))
-        r["name"] = s.get("name")
-        r["market"] = s.get("market")
-        r["pe"] = float(pe[s["symbol"]]) if pe.get(s["symbol"]) is not None else None
+    for sym, r in screen(syms, history, sector_of).items():
+        r["name"] = meta[sym].get("name")
+        r["market"] = meta[sym].get("market")
+        r["pe"] = float(pe[sym]) if pe.get(sym) is not None else None
         out.append(r)
     if verdict:
         out = [r for r in out if r["verdict"] == verdict]

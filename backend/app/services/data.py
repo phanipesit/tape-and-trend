@@ -1,6 +1,7 @@
 """Candle + fundamentals layer: yfinance -> PostgreSQL cache -> API."""
 import logging
 import threading
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
@@ -352,6 +353,30 @@ def get_fundamentals_history(symbol: str) -> list[dict]:
     routers/screener.py warns about."""
     return q("""SELECT * FROM fundamentals_history WHERE symbol=:s
                 ORDER BY fiscal_year DESC""", s=symbol)
+
+
+def get_fundamentals_history_all(symbols: list[str] | None = None) -> dict[str, list[dict]]:
+    """Every symbol's statements in ONE query, keyed by symbol, newest first.
+
+    The per-symbol version above was being called in a loop over the whole universe by
+    both the quality page and, once quality joined the screener, the screener too —
+    ~124 round trips per render, then ~248. The statements table holds five rows per
+    company, so the entire thing is smaller than a single day of candles; fetching it
+    whole and grouping in Python is strictly cheaper than asking 124 times.
+
+    Symbols with no cached statements are simply absent, which is what callers key on.
+    """
+    sql = "SELECT * FROM fundamentals_history"
+    params = {}
+    if symbols is not None:
+        if not symbols:
+            return {}
+        sql += " WHERE symbol = ANY(:syms)"
+        params["syms"] = list(symbols)
+    out: dict[str, list[dict]] = defaultdict(list)
+    for r in q(sql + " ORDER BY symbol, fiscal_year DESC", **params):
+        out[r["symbol"]].append(r)
+    return dict(out)
 
 
 def get_intraday(symbol: str, interval: str = "5m", limit: int = 500, auto: bool = True) -> pd.DataFrame:
