@@ -226,6 +226,18 @@ from a contract more than a week from the modelled horizon. NSE sends `0` for un
 `_num()` maps that to `None`, because a zero IV is a blank, not a measurement, and would
 collapse the option to intrinsic value.
 
+**Chain freshness is driven by `scripts/daily-snapshot.py`, not by page views.** The cache
+only ever refreshed when someone opened the Options page, so `^NSEI` sat on a 2026-08-03
+fetch for a month while the lab priced off it — `NSE_CHAIN_STALE_MINUTES` existed but
+nothing consulted it unless a request happened to arrive. The daily job now refreshes the
+two index underlyings, for the same reason it captures FII/DII flows: Task Scheduler runs
+whether or not uvicorn does. Equity chains stay on demand, since there is no universe of
+them worth pre-fetching. The job then calls `nse_chain.prune_expired()`, which is a
+whole-table sweep rather than `refresh_chain`'s per-symbol one: a name looked up once on
+the Options page and never again keeps its dead contracts forever otherwise. Pruning runs
+*after* the refreshes, so a contract expiring today is replaced by its live successor in
+the same run rather than leaving a gap.
+
 **Options pricing** (`services/options.py`) is Black-Scholes, with `realized_vol()` now the
 **fallback** rather than the only source — it annualises the stdev of 60 days of
 log returns from the same cached candles everything else uses (clamped to `MIN_VOL`/`MAX_VOL` so a

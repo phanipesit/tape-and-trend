@@ -195,3 +195,38 @@ def test_expired_rows_do_not_make_the_cache_look_fresh(monkeypatch):
     monkeypatch.setattr(nse_chain, "q", fake_q)
     assert nse_chain._cache_fresh("^NSEI", want=date.today()) is False
     assert "CURRENT_DATE" in seen["sql"]
+
+
+# ---------------------------------------------------------------- pruning
+
+def test_prune_is_a_no_op_when_nothing_expired(monkeypatch):
+    """No DELETE at all when the count is zero — a daily job that opens a write
+    transaction every run for nothing is noise in the log and in the WAL."""
+    monkeypatch.setattr(nse_chain, "q", lambda *a, **k: [{"n": 0}])
+
+    def boom():
+        raise AssertionError("opened a write transaction with nothing to delete")
+    monkeypatch.setattr(nse_chain, "engine", type("E", (), {"begin": staticmethod(boom)})())
+    assert nse_chain.prune_expired() == 0
+
+
+def test_prune_reports_how_many_it_dropped(monkeypatch):
+    """The daily snapshot logs this number, so it must be the count of rows removed and
+    not, say, a truthy flag."""
+    monkeypatch.setattr(nse_chain, "q", lambda *a, **k: [{"n": 436}])
+    ran = []
+
+    class Cx:
+        def exec_driver_sql(self, sql, *a):
+            ran.append(sql)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setattr(nse_chain, "engine",
+                        type("E", (), {"begin": staticmethod(lambda: Cx())})())
+    assert nse_chain.prune_expired() == 436
+    # Every symbol, unlike refresh_chain's per-symbol sweep — that is the whole point.
+    assert len(ran) == 1 and "symbol=" not in ran[0]

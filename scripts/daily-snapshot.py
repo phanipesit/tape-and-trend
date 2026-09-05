@@ -78,6 +78,26 @@ def main() -> int:
     except Exception as e:
         parts.append(f"flows=FAILED({type(e).__name__}: {str(e)[:60]})")
 
+    # Option chains refresh only when someone opens the Options page, so ^NSEI sat on a
+    # 2026-08-03 fetch for a month while the lab happily priced off it. The staleness
+    # window exists but nothing drives it. Only the index underlyings: those are the ones
+    # the lab defaults to, and equity chains are fetched on demand.
+    from app.services.nse_chain import refresh_chain, prune_expired
+    for sym in ("^NSEI", "^NSEBANK"):
+        try:
+            parts.append(f"chain[{sym}]={refresh_chain(sym)}")
+        except Exception as e:
+            parts.append(f"chain[{sym}]=FAILED({type(e).__name__}: {str(e)[:40]})")
+
+    # refresh_chain prunes only the symbol it just fetched, so a name looked up once on
+    # the Options page and never again keeps its dead contracts forever. Sweep the whole
+    # table instead, and after the refreshes rather than before, so a contract expiring
+    # today is replaced by the live one in the same run.
+    try:
+        parts.append(f"pruned={prune_expired()}")
+    except Exception as e:
+        parts.append(f"pruned=FAILED({type(e).__name__}: {str(e)[:40]})")
+
     line = " | ".join(parts)
     print(line)
     LOG.parent.mkdir(parents=True, exist_ok=True)

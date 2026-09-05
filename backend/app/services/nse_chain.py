@@ -233,3 +233,19 @@ def implied_vol(symbol: str, strike: float, kind: str, days: int = 30,
         "ltp": None if best["ltp"] is None else float(best["ltp"]),
         "fetched_at": str(best["fetched_at"]),
     }
+
+
+def prune_expired() -> int:
+    """Drop every expired contract, for all symbols.
+
+    refresh_chain() prunes only the symbol it just fetched, which leaves dead rows
+    behind for anything fetched once and never again — RELIANCE held 82 of them a week
+    after a single lookup. implied_vol already excludes expired contracts so this is
+    hygiene rather than correctness, but without it the table only ever grows.
+    """
+    rows = q("SELECT count(*) n FROM option_chain WHERE expiry < CURRENT_DATE")
+    n = rows[0]["n"] if rows else 0
+    if n:
+        with engine.begin() as cx:
+            cx.exec_driver_sql("DELETE FROM option_chain WHERE expiry < CURRENT_DATE")
+    return n
