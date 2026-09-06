@@ -1,13 +1,14 @@
 """AI stock analysis: Claude API, then a local model via Ollama, then a rule-based narrative."""
 import json
 import logging
+from functools import partial
 
 from .data import get_candles, get_symbol
 from .indicators import enrich
 from .news import ticker_news
 from .signals import analyse
-from ..config import (ANTHROPIC_API_KEY, OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TIMEOUT,
-                      OLLAMA_URL)
+from ..config import (ANTHROPIC_API_KEY, OLLAMA_DEEP_MODEL, OLLAMA_DEEP_TIMEOUT,
+                      OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TIMEOUT, OLLAMA_URL)
 
 log = logging.getLogger(__name__)
 
@@ -193,16 +194,21 @@ def _claude(ctx: dict, system: str = SYSTEM, task: str = "stock") -> str:
     return text
 
 
-def _ollama(ctx: dict, system: str = SYSTEM, task: str = "stock") -> str:
+def _ollama(ctx: dict, system: str = SYSTEM, task: str = "stock",
+            model: str | None = None, timeout: float | None = None) -> str:
     """Local model through Ollama's /api/chat. No key, no cost, but slow and much smaller
-    than Claude — the prompts are shared, so quality is the only thing that differs."""
+    than Claude — the prompts are shared, so quality is the only thing that differs.
+
+    `model` and `timeout` exist so the same function serves both local providers. A
+    reasoning model spends most of its tokens on internal thought that never reaches the
+    output, so it needs a far longer deadline than its visible answer would suggest."""
     import httpx  # lazy, same reason as _claude
 
     r = httpx.post(
         f"{OLLAMA_URL}/api/chat",
-        timeout=OLLAMA_TIMEOUT,
+        timeout=OLLAMA_TIMEOUT if timeout is None else timeout,
         json={
-            "model": OLLAMA_MODEL,
+            "model": model or OLLAMA_MODEL,
             "stream": False,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": _user_msg(ctx, task)}],
@@ -311,22 +317,31 @@ def _rule_based(ctx: dict) -> str:
     return "\n".join(lines)
 
 
-def _providers() -> list[tuple[str, str, callable]]:
+def _providers(deep: bool = False) -> list[tuple[str, str, callable]]:
     """(source, model, fn) for each configured AI backend, best first. Anything not
-    configured is simply absent, so `_run` degrades to the rule-based narrative."""
+    configured is simply absent, so `_run` degrades to the rule-based narrative.
+
+    `deep` inserts the slow local reasoning model ahead of the fast one; the fast one
+    stays in the chain behind it, so a deep request that times out still returns a
+    narrative rather than falling all the way through to the rule-based text. Claude
+    keeps the top slot either way — `deep` picks between the *local* models, and a
+    hosted frontier model beats both when a key is configured."""
     p = []
     if ANTHROPIC_API_KEY:
         p.append(("claude", CLAUDE_MODEL, _claude))
+    if deep and OLLAMA_DEEP_MODEL:
+        p.append(("ollama-deep", OLLAMA_DEEP_MODEL,
+                  partial(_ollama, model=OLLAMA_DEEP_MODEL, timeout=OLLAMA_DEEP_TIMEOUT)))
     if OLLAMA_MODEL:
         p.append(("ollama", OLLAMA_MODEL, _ollama))
     return p
 
 
-def _run(ctx: dict, system: str, task: str) -> dict:
+def _run(ctx: dict, system: str, task: str, deep: bool = False) -> dict:
     # `direction` is null when no rule fired — the plan's fallback LONG is not a view.
     out = {"symbol": ctx["symbol"], "close": ctx["close"], "direction": ctx["signal_direction"]}
     failed = []
-    for source, model, call in _providers():
+    for source, model, call in _providers(deep):
         try:
             return {**out, "source": source, "model": model, "analysis": call(ctx, system, task)}
         except Exception as e:
@@ -339,14 +354,15 @@ def _run(ctx: dict, system: str, task: str) -> dict:
     return res
 
 
-def analyze(symbol: str) -> dict:
-    return _run(_context(symbol), SYSTEM, "stock")
+def analyze(symbol: str, deep: bool = False) -> dict:
+    return _run(_context(symbol), SYSTEM, "stock", deep)
 
 
 def analyze_options(symbol: str, strategy_name: str, strategy_desc: str, legs: list[dict],
                     net_premium: float, max_profit: str, max_loss: str,
                     breakevens: list[float], days_to_expiry: int | None = None,
-                    vol_pct: float | None = None, greeks: dict | None = None) -> dict:
+                    vol_pct: float | None = None, greeks: dict | None = None,
+                    deep: bool = False) -> dict:
     ctx = _context(symbol)
     i = ctx["indicators"]
     ctx["strategy"] = {"name": strategy_name, "desc": strategy_desc, "legs": legs,
@@ -356,4 +372,4 @@ def analyze_options(symbol: str, strategy_name: str, strategy_desc: str, legs: l
                        "realized_vol_pct": vol_pct, "position_greeks": greeks,
                        # Pre-computed: the model kept getting this comparison backwards.
                        "breakevens_vs_range": _range_note(breakevens, i["low_20d"], i["high_20d"])}
-    return _run(ctx, SYSTEM_OPTIONS, "options strategy")
+    return _run(ctx, SYSTEM_OPTIONS, "options strategy", deep)

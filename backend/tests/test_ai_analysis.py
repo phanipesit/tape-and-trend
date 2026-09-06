@@ -115,8 +115,8 @@ def test_rule_based_and_derived_agree(ctx_factory):
 
 def test_falls_through_to_rules_and_reports_failures(ctx_factory, monkeypatch):
     ctx = ctx_factory()
-    monkeypatch.setattr(ai, "_providers",
-                        lambda: [("ollama", "llama3", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))])
+    monkeypatch.setattr(ai, "_providers", lambda deep=False:
+                        [("ollama", "llama3", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))])
     res = ai._run(ctx, ai.SYSTEM, "stock")
     assert res["source"] == "rules"
     assert "ollama (RuntimeError)" in res["note"]
@@ -125,10 +125,58 @@ def test_falls_through_to_rules_and_reports_failures(ctx_factory, monkeypatch):
 
 def test_first_working_provider_wins(ctx_factory, monkeypatch):
     ctx = ctx_factory()
-    monkeypatch.setattr(ai, "_providers", lambda: [
+    monkeypatch.setattr(ai, "_providers", lambda deep=False: [
         ("claude", "m1", lambda *a: (_ for _ in ()).throw(RuntimeError("down"))),
         ("ollama", "llama3", lambda *a: "local narrative"),
     ])
     res = ai._run(ctx, ai.SYSTEM, "stock")
     assert res["source"] == "ollama" and res["analysis"] == "local narrative"
     assert "note" not in res   # a recovered failure isn't worth surfacing
+
+
+# ------------------------------------------------- the deep local provider
+
+def test_deep_is_off_unless_the_env_var_is_set(monkeypatch):
+    """An existing checkout must be unaffected. Empty OLLAMA_DEEP_MODEL means asking for
+    deep changes nothing, rather than erroring or falling through to the rules."""
+    monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ai, "OLLAMA_DEEP_MODEL", "")
+    monkeypatch.setattr(ai, "OLLAMA_MODEL", "llama3")
+    assert [s for s, _, _ in ai._providers(deep=True)] == ["ollama"]
+
+
+def test_deep_goes_in_front_of_the_fast_model_not_instead_of_it(monkeypatch):
+    """The fast model stays in the chain behind it, so a deep call that times out still
+    returns a narrative instead of dropping all the way to the rule-based text."""
+    monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ai, "OLLAMA_DEEP_MODEL", "apodex-mini")
+    monkeypatch.setattr(ai, "OLLAMA_MODEL", "llama3")
+    got = [(s, m) for s, m, _ in ai._providers(deep=True)]
+    assert got == [("ollama-deep", "apodex-mini"), ("ollama", "llama3")]
+
+
+def test_claude_still_outranks_the_deep_local_model(monkeypatch):
+    """`deep` picks between the local models. A hosted frontier model beats both, so a
+    configured key must not be demoted by asking for deep reasoning."""
+    monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "key")
+    monkeypatch.setattr(ai, "OLLAMA_DEEP_MODEL", "apodex-mini")
+    monkeypatch.setattr(ai, "OLLAMA_MODEL", "llama3")
+    assert [s for s, _, _ in ai._providers(deep=True)][0] == "claude"
+
+
+def test_deep_provider_carries_its_own_model_and_timeout(monkeypatch):
+    """OLLAMA_TIMEOUT is 180s and the deep model routinely exceeds that, so the partial
+    must override both the model name and the deadline."""
+    monkeypatch.setattr(ai, "OLLAMA_DEEP_MODEL", "apodex-mini")
+    monkeypatch.setattr(ai, "OLLAMA_DEEP_TIMEOUT", 900.0)
+    monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ai, "OLLAMA_MODEL", "llama3")
+    fn = dict((s, f) for s, _, f in ai._providers(deep=True))["ollama-deep"]
+    assert fn.keywords == {"model": "apodex-mini", "timeout": 900.0}
+
+
+def test_plain_requests_are_untouched(monkeypatch):
+    monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ai, "OLLAMA_DEEP_MODEL", "apodex-mini")
+    monkeypatch.setattr(ai, "OLLAMA_MODEL", "llama3")
+    assert [s for s, _, _ in ai._providers()] == ["ollama"]

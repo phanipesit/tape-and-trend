@@ -277,6 +277,25 @@ against the underlying's mechanical signals). Both must treat `direction` defaul
 with an empty `mechanical_signals` as "no signal fired," never as a real bullish read — see the
 `SYSTEM_OPTIONS` prompt and `_rule_based`'s strategy branch for why.
 
+**There are two local models, and the choice is per request.** `OLLAMA_MODEL` (llama3) is
+the default; `OLLAMA_DEEP_MODEL` is a slow reasoning model reached with `?deep=true` on
+`/api/ai/analyze/{symbol}` or `deep: true` in the options body. It is a genuine trade
+rather than a strict upgrade, which is why it is a caller's choice and not a new default.
+Measured 2026-09-05 on the same RELIANCE prompt: llama3 answered in 26s, apodex-mini
+(Qwen3.5-35B-A3B, Q3_K_M) in 321s. Apodex was the better read — it restated the `derived`
+fields by name instead of re-deriving them, and it declined the trade plan's default LONG
+— but roughly seven eighths of its 3,968 generated tokens were internal reasoning that
+never reached the output. That is where the five minutes goes, so `OLLAMA_DEEP_TIMEOUT`
+defaults to 900s; the ordinary 180s deadline is not survivable.
+
+`_providers(deep)` inserts it **ahead of** the fast model, never instead of it, so a deep
+call that times out still returns a llama3 narrative rather than dropping all the way to
+the rule-based text. Claude keeps the top slot regardless: `deep` chooses between the
+*local* models, and a hosted frontier model beats both. `OLLAMA_DEEP_MODEL` defaults to
+empty, so a checkout that has not configured one is unaffected and `deep=true` is silently
+a no-op. The UI toggle is deliberately not hidden when it is unconfigured — `aiCredit()`
+reports which model actually ran, so a fallback is visible rather than a toggle that lies.
+
 **Quality screen** (`services/quality.py`) is seven accounting tests that *exclude*
 companies, adapted from ai-berkshire (MIT). It is deliberately the one feature here that
 reports no expectancy: swing outcomes resolve in 10-20 bars and can be scored, quality

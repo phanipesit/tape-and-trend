@@ -43,6 +43,7 @@ export default function Options() {
   const [priceErr, setPriceErr] = useState(null);
   const [ai, setAi] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [deep, setDeep] = useState(false);
 
   // Ask the backend for theoretical premiums + Greeks for these strikes at this expiry.
   // Manual premium edits are deliberately overwritten — that's what "Re-price" means.
@@ -112,6 +113,7 @@ export default function Options() {
       days_to_expiry: days,
       vol_pct: model?.vol_pct ?? null,
       greeks: model?.position ?? null,
+      deep,
     } })
       .then(setAi)
       .catch((e) => setAi({ error: String(e.message || e) }))
@@ -234,11 +236,22 @@ export default function Options() {
         <div className="card text-sm">
           <div className="flex items-center justify-between mb-1">
             <h3 className="font-semibold">✨ AI strategy analysis</h3>
-            <button className="btn !py-1.5" onClick={runAi} disabled={aiBusy}>
-              {aiBusy ? "Analysing…" : ai ? "↻ Re-analyse" : `Analyse this ${STRATS[strat].n.toLowerCase()}`}</button>
+            <div className="flex items-center gap-3">
+              {/* Same toggle as /charts. The attribution line reports which model actually
+                  ran, so an unconfigured deep model shows as a fallback rather than a lie. */}
+              <label className="flex items-center gap-1.5 text-xs text-mut"
+                title="Use the slow local reasoning model (OLLAMA_DEEP_MODEL). Minutes, not seconds. Falls back to the fast model if it is not configured.">
+                <input type="checkbox" checked={deep} disabled={aiBusy}
+                  onChange={(e) => setDeep(e.target.checked)} />
+                Deep
+              </label>
+              <button className="btn !py-1.5" onClick={runAi} disabled={aiBusy}>
+                {aiBusy ? "Analysing…" : ai ? "↻ Re-analyse" : `Analyse this ${STRATS[strat].n.toLowerCase()}`}</button>
+            </div>
           </div>
           {!ai && !aiBusy && <p className="text-dim">Reads {sym}&apos;s trend/signals alongside this strategy&apos;s legs, Greeks and break-evens — does the setup make sense given the current technical picture?</p>}
-          {aiBusy && <p className="text-dim">Reading candles, signals and the strategy&apos;s legs…</p>}
+          {aiBusy && <p className="text-dim">Reading candles, signals and the strategy&apos;s legs…
+            {deep && " Deep reasoning is on, so this takes minutes rather than seconds."}</p>}
           {ai?.error && <p className="text-down">Analysis failed — is the backend running? {ai.error}</p>}
           {ai?.analysis && (<>
             <p className="text-[10px] text-dim uppercase tracking-wide mb-1">

@@ -13,6 +13,7 @@ function ChartsInner() {
   const [f, setF] = useState(null);
   const [ai, setAi] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [deep, setDeep] = useState(false);
 
   useEffect(() => { api("/api/symbols").then(setSyms).catch(() => {}); }, []);
   useEffect(() => {
@@ -23,7 +24,7 @@ function ChartsInner() {
 
   const runAi = () => {
     setAiBusy(true); setAi(null);
-    api(`/api/ai/analyze/${symbol}`)
+    api(`/api/ai/analyze/${symbol}${deep ? "?deep=true" : ""}`)
       .then(setAi)
       .catch((e) => setAi({ error: String(e.message || e) }))
       .finally(() => setAiBusy(false));
@@ -73,11 +74,23 @@ function ChartsInner() {
       <div className="card text-sm">
         <div className="flex items-center justify-between mb-1">
           <h3 className="font-semibold">✨ AI stock analysis</h3>
-          <button className="btn !py-1.5" onClick={runAi} disabled={aiBusy}>
-            {aiBusy ? "Analysing…" : ai ? "↻ Re-analyse" : `Analyse ${symbol}`}</button>
+          <div className="flex items-center gap-3">
+            {/* The attribution line below reports which model actually ran, so there is no
+                need to hide this when OLLAMA_DEEP_MODEL is unset — the request simply falls
+                back and says so, rather than the toggle lying about what it did. */}
+            <label className="flex items-center gap-1.5 text-xs text-mut"
+              title="Use the slow local reasoning model (OLLAMA_DEEP_MODEL). Minutes, not seconds — it spends most of its tokens on internal reasoning. Falls back to the fast model if it is not configured.">
+              <input type="checkbox" checked={deep} disabled={aiBusy}
+                onChange={(e) => setDeep(e.target.checked)} />
+              Deep
+            </label>
+            <button className="btn !py-1.5" onClick={runAi} disabled={aiBusy}>
+              {aiBusy ? "Analysing…" : ai ? "↻ Re-analyse" : `Analyse ${symbol}`}</button>
+          </div>
         </div>
         {!ai && !aiBusy && <p className="text-dim">One-click read of the chart, signals, fundamentals and news for {symbol}.</p>}
-        {aiBusy && <p className="text-dim">Reading candles, indicators, fundamentals and headlines…</p>}
+        {aiBusy && <p className="text-dim">Reading candles, indicators, fundamentals and headlines…
+          {deep && " Deep reasoning is on, so this takes minutes rather than seconds."}</p>}
         {ai?.error && <p className="text-down">Analysis failed — is the backend running? {ai.error}</p>}
         {ai?.analysis && (<>
           <p className="text-[10px] text-dim uppercase tracking-wide mb-1">

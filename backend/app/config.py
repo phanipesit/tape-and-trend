@@ -10,6 +10,16 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")   # set empty to disable the local-LLM path
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "180"))  # an 8B model on CPU is slow
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))   # llama3's full window; Ollama defaults to 4096
+# A second local model, opted into per request rather than replacing the first. Measured
+# on 2026-09-05 against the same RELIANCE prompt: llama3 answered in 26s, apodex-mini in
+# 321s. Apodex was worth it on quality — it restated the `derived` fields by name instead
+# of re-deriving them, and it declined the default LONG plan — but seven eighths of its
+# 3,968 generated tokens were internal reasoning that never reached the output. That is a
+# real trade, not a strict improvement, so it stays a choice the caller makes rather than
+# a new default. Empty disables it, which is what an existing checkout gets.
+OLLAMA_DEEP_MODEL = os.getenv("OLLAMA_DEEP_MODEL", "")
+# OLLAMA_TIMEOUT is 180s, which the deep model blows through on nearly every call.
+OLLAMA_DEEP_TIMEOUT = float(os.getenv("OLLAMA_DEEP_TIMEOUT", "900"))
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 # The user's own clock. Every venue session is rendered in this zone as well as the
 # venue's, so "when does NYSE open" is answerable without mental arithmetic. IANA name.
