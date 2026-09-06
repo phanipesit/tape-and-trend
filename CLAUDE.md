@@ -296,6 +296,16 @@ empty, so a checkout that has not configured one is unaffected and `deep=true` i
 a no-op. The UI toggle is deliberately not hidden when it is unconfigured — `aiCredit()`
 reports which model actually ran, so a fallback is visible rather than a toggle that lies.
 
+Two measurements settled the default, both worth not repeating. Across 12 symbols spanning
+both markets, llama3 contradicted the `derived` block **once** (CIPLA, "oversold" against a
+neutral `rsi_zone`) in 25-37s per symbol. One error in twelve is the derived block working,
+so the fast model keeps the default slot and deep stays opt-in. And the deep model **cannot
+coexist with the dev stack on a 24GB machine**: apodex-mini sits resident at 17 GB (64% CPU
+/ 36% GPU at Q3_K_M), which left 1.2 GB free and got the backend, the frontend and the
+benchmark itself killed for memory pressure mid-run. Treat `?deep=true` as a stop-the-dev-
+servers-first tool, not something to reach for mid-session, and `ollama stop <model>` to
+hand the memory back — Ollama holds a model resident for minutes after the last call.
+
 **Quality screen** (`services/quality.py`) is seven accounting tests that *exclude*
 companies, adapted from ai-berkshire (MIT). It is deliberately the one feature here that
 reports no expectancy: swing outcomes resolve in 10-20 bars and can be scored, quality
