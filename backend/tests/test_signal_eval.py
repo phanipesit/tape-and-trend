@@ -153,3 +153,61 @@ def test_snapshot_records_everything_when_all_venues_are_shut(monkeypatch):
     monkeypatch.setattr(signal_eval, "q", lambda sql, **kw: [{"id": 1}])
 
     assert signal_eval.snapshot_today() == 2
+
+
+# ---------------------------------------------------------------- executable scoring
+
+def obars(rows):
+    """rows = list of (o, h, l, c)."""
+    d = pd.bdate_range("2026-06-01", periods=len(rows)).date
+    return pd.DataFrame([{"d": d[i], "o": o, "h": h, "l": l, "c": c}
+                         for i, (o, h, l, c) in enumerate(rows)])
+
+
+def test_gap_through_the_stop_fills_at_the_open_not_the_stop():
+    """Without an open every stop read exactly -1.00R; an overnight gap loses more."""
+    res = score_signal("LONG", 100, 95, 115, obars([(100, 101, 99, 100), (90, 91, 88, 89)]))
+    assert res["outcome"] == "stop_hit" and res["exit_price"] == 90 and res["r_multiple"] == -2.0
+
+
+def test_gap_through_the_target_earns_the_gap():
+    res = score_signal("SHORT", 100, 105, 85, obars([(100, 101, 99, 100), (80, 82, 79, 81)]))
+    assert res["outcome"] == "target_hit" and res["r_multiple"] == 4.0
+
+
+def test_executable_entry_is_the_next_open_with_levels_rebased_on_it():
+    from app.services.signal_eval import score_executable
+    # signal closed at 100; next session opens at 104 and runs to the re-based target
+    after = obars([(104, 105, 103, 104), (105, 114, 104, 113)])
+    res = score_executable("LONG", 2.0, after, cost_frac=0.0)
+    assert res["fill_entry"] == 104
+    assert res["outcome"] == "target_hit" and res["exit_price"] == 110    # 104 + 3*2
+    assert res["r_multiple"] == 2.0
+
+
+def test_net_r_deducts_costs_in_r_at_the_fill():
+    from app.services.signal_eval import score_executable
+    after = obars([(100, 101, 96, 97)])        # stopped at 97 = 100 - 1.5*2
+    res = score_executable("LONG", 2.0, after, cost_frac=0.003)
+    assert res["r_multiple"] == -1.0
+    assert res["cost_r"] == 0.1                # 0.3% of 100 over 3 of risk
+    assert res["r_net"] == -1.1
+
+
+def test_stop_is_live_on_the_entry_bar():
+    from app.services.signal_eval import score_executable
+    res = score_executable("LONG", 2.0, obars([(100, 100.5, 96, 96.5)]), cost_frac=0.0)
+    assert res["outcome"] == "stop_hit" and res["bars_held"] == 1
+
+
+def test_executable_needs_a_bar_and_an_atr():
+    from app.services.signal_eval import score_executable
+    assert score_executable("LONG", 2.0, obars([]), 0.0) is None
+    assert score_executable("LONG", 0.0, obars([(1, 1, 1, 1)]), 0.0) is None
+
+
+def test_cost_fraction_includes_slippage_both_sides():
+    from app.services.signal_eval import cost_fraction, SLIPPAGE_BPS
+    from app.services.costs import round_trip_pct
+    assert cost_fraction("IN") == round_trip_pct(100_000, "IN") / 100 + 2 * SLIPPAGE_BPS / 10_000
+    assert cost_fraction("US") < cost_fraction("IN")     # no STT in the US

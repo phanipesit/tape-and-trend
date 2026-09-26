@@ -25,10 +25,11 @@ from .signals import STOP_ATR, TARGET_ATR
 GRADES = ("TRADE", "PAPER", "UNPROVEN", "SKIP")
 _RANK = {g: i for i, g in enumerate(GRADES)}
 
-# signal_outcomes R is gross. costs.py puts an Indian delivery round trip near 40bps,
-# which against a 1.5-ATR stop on a ~2%-ATR stock is roughly 0.1R — so a lean smaller
-# than that is paying the broker, not the trader.
-PAPER_MIN_R = 0.10
+# The record is net R (edge_stats judges r_net), so costs are already paid. This was
+# 0.10 while R was gross — roughly one round trip on these stops — and keeping it now
+# would charge costs twice. What remains is a small margin: a net lean of a few
+# hundredths of an R is inside the noise of the cost estimate itself.
+PAPER_MIN_R = 0.05
 
 _WHY = {
     "TRADE": "measured edge — 95% interval clears zero",
@@ -47,7 +48,9 @@ def rule_record(tag: str, regime: str | None, book: dict) -> dict:
     enough, else its all-regime record, else nothing."""
     cell = book.get((tag, regime)) if regime else None
     basis = f"{tag} in {regime}"
-    if not cell or cell["n"] < MIN_SAMPLE:
+    # Thin by either measure: too few signals, or too few distinct days for the
+    # clustered interval to mean anything (edge_stats marks that "too few").
+    if not cell or cell["n"] < MIN_SAMPLE or cell.get("verdict") == "too few":
         cell, basis = book.get((tag, None)), f"{tag}, all regimes"
     if not cell:
         return {"verdict": "no data", "n": 0, "avg_r": None, "ci_low": None,
@@ -64,7 +67,7 @@ def rule_grade(rec: dict) -> str:
     if v == "negative":
         return "SKIP"
     if v == "inconclusive":
-        # a lean smaller than costs is zero expectancy, not an unproven edge
+        # a lean inside the cost estimate's own noise is zero expectancy, not an edge
         return "PAPER" if (rec["avg_r"] or 0) >= PAPER_MIN_R else "SKIP"
     return "UNPROVEN"
 

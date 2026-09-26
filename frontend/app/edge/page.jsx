@@ -86,6 +86,13 @@ function RuleStats({ d }) {
           cannot distinguish this rule from random — not that it works. A win here is any
           positive R, including an expired trade that closed up.
         </p>
+        <p className="text-dim text-[11px] mb-2">
+          R is <b className="text-mut">net</b>: entered at the next session's open, gaps through a stop
+          or target filled at the open, and round-trip costs plus slippage deducted
+          {d.overall?.avg_cost_r != null && <> (≈{d.overall.avg_cost_r}R a trade)</>}. The interval
+          counts <b className="text-mut">distinct signal days</b>, not signals — five stocks firing on
+          one day are one market move — and no call is made on fewer than {d.min_days ?? 10} days.
+        </p>
         <table className="w-full">{head}<tbody>
           {d.overall && <Row r={{ ...d.overall, grp: "ALL RULES" }} />}
           {d.by_rule?.map((r) => <Row key={r.grp} r={r} indent />)}
@@ -132,7 +139,7 @@ export default function Edge() {
   useEffect(() => { api("/api/performance/rules").then(setRules).catch(() => {}); }, []);
 
   const done = d?.recent?.filter((r) => r.outcome) || [];
-  const totalR = done.reduce((s, r) => s + (Number(r.r_multiple) || 0), 0);
+  const totalR = done.reduce((s, r) => s + (Number(r.r_net) || 0), 0);
 
   return (
     <div className="space-y-4">
@@ -175,15 +182,21 @@ export default function Edge() {
                   <td><Link className="font-bold hover:text-brass" href={`/charts?symbol=${r.symbol}`}>{r.symbol}</Link></td>
                   <td className="text-mut">{label(r.setup_tag)}</td>
                   <td className={r.direction === "SHORT" ? "text-down" : "text-up"}>{r.direction}</td>
-                  <td>{fmt(r.entry)}</td><td>{fmt(r.stop)}</td><td>{fmt(r.target)}</td>
+                  {/* entry/stop/target are the plan as shown when the signal fired; R is measured
+                      from the next session's open, so show that fill alongside. */}
+                  <td>{fmt(r.entry)}{r.fill_entry != null && (
+                    <span className="block text-[10px] text-dim" title="Scored from the next session's open; stop and target re-based on it">
+                      fill {fmt(r.fill_entry)}</span>)}</td>
+                  <td>{fmt(r.stop)}</td><td>{fmt(r.target)}</td>
                   <td className={cls}>{txt}</td>
-                  <td className={rCls(r.r_multiple)}>{r.r_multiple == null ? "—" : rFmt(Number(r.r_multiple))}</td>
+                  <td className={rCls(r.r_net)} title={r.r_net == null ? undefined : `gross ${rFmt(Number(r.r_multiple))}, costs ${rFmt(-Number(r.cost_r))}`}>
+                    {r.r_net == null ? "—" : rFmt(Number(r.r_net))}</td>
                   <td className="text-dim">{r.bars_held ?? "—"}</td>
                 </tr>);
             })}
           </tbody></table>
         </div>)}
-      <p className="text-dim text-xs">Signal outcomes assume mechanical fills at the plan's levels with no slippage. Educational tool — not investment advice.</p>
+      <p className="text-dim text-xs">Signal outcomes are scored mechanically: next-open entry, stop assumed first when stop and target share a bar, costs and slippage deducted. Educational tool — not investment advice.</p>
     </div>
   );
 }

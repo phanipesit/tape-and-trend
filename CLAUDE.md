@@ -29,6 +29,7 @@ psql -d tapetrend -f db/migration_012_signal_regime.sql  # regime column on sign
 psql -d tapetrend -f db/migration_013_institutional_flows.sql # daily FII/DII flows
 psql -d tapetrend -f db/migration_014_fundamentals_history.sql # statements for the quality screen
 psql -d tapetrend -f db/migration_015_bond_yields.sql   # FBIL G-Sec curve + US Treasury rows
+psql -d tapetrend -f db/migration_016_executable_outcomes.sql # next-open fills, net R, scoring version
 ```
 Run every migration in order — skipping any leaves tables that feature code reads at
 request time missing. `main.py`'s startup check logs an error naming each absent table.
@@ -143,8 +144,7 @@ whole ran -0.094R with its 95% interval below zero. So `grade()` looks up the re
 the *rule that fired*, in the regime it fired in (`edge_stats.edge_book()`), falling back
 to the all-regime pool when that cell is under `MIN_SAMPLE`, because the same rule flips
 sign across regimes (breakout_20d: +0.47R risk-off, -0.29R risk-on). Grades are TRADE
-(interval clears zero) / PAPER (leans ≥ `PAPER_MIN_R`, roughly one round trip of costs) /
-UNPROVEN / SKIP. The plan is rebuilt from the best-graded rule in *its own* direction,
+(interval clears zero) / PAPER (net lean ≥ `PAPER_MIN_R`) / UNPROVEN / SKIP. The plan is rebuilt from the best-graded rule in *its own* direction,
 since that is the plan `signal_eval` scored — the engine's net plan can point the other
 way. The engine itself is untouched: SKIP rules keep firing and being logged, which is
 the only way one can earn its way back. `/api/signals/desk` is the page header — regime
@@ -162,6 +162,23 @@ breakout/breakdown, EMA9/20 cross) and its own tighter ATR stop/target multiples
 report zero intraday volume from Yahoo, so `vwap` comes back `null` and volume-gated
 rules never fire for them — expected, not a bug. No backtester for this yet (would need
 session-aware handling — forced end-of-day exits, no overnight holds).
+
+**Signal outcomes are scored as they could have been traded, and judged net of costs**
+(`signal_eval.score_executable`, migration_016). Entry is the *next* session's open (the
+signal bar's own close only exists once the bar is final, so nobody is filled at it),
+stop/target are re-based on that fill, and a bar that opens through a level fills at the
+open (before this, every stop read exactly -1.00R). `r_multiple` is the gross executable
+R; `r_net` subtracts `cost_r` (costs.py round trip + `SLIPPAGE_BPS` per side), and `r_net`
+is what `/edge`, `/performance` and the playbook judge by. Re-scoring on 2026-09-26 moved
+the system from -0.10R to -0.20R a trade; costs alone are ~0.11R. `scoring` holds the
+method version, and `evaluate_open()` re-scores any row whose version is not
+`SCORING_VERSION`, so bumping it re-scores history rather than leaving two definitions of
+R mixed in one table. `edge_stats` **clusters its intervals by signal date**, because
+five stocks firing on one day are one market move, not five trials, and it makes no call
+on fewer than `MIN_DAYS` distinct days. Those two changes together took rsi_overbought,
+the only TRADE, to PAPER: +0.36R [+0.10, +0.63] became +0.22R [-0.04, +0.48]. A handful of
+rows whose signal bar has since vanished from Yahoo's history (six IN names on 2026-06-26)
+cannot be re-scored; they keep their old outcome with no `r_net` and count nowhere.
 
 **Backtester** (`services/backtest.py`) is vectorized numpy over `enrich()`'d candles, long-only,
 six built-in strategies (`emax`, `rsi`, `macd`, `signal`, `rsi2`, `donchian`) selected by string,
@@ -462,6 +479,6 @@ describes a *different* migration (journal/risk/alerts schema changes) as "migra
 journal columns the phantom "migration_002" was supposed to create), and
 `migration_006_signal_outcomes.sql`, `migration_007_rotation.sql`,
 `migration_008_niftybank.sql`, `migration_009_intraday.sql`, and
-`migration_010_global_markets.sql`, `migration_011_option_chain.sql`, and 012–015 (signal regime, institutional flows, fundamentals history, bond yields) — so the next free number is `migration_016`. If you're
+`migration_010_global_markets.sql`, `migration_011_option_chain.sql`, and 012–016 (signal regime, institutional flows, fundamentals history, bond yields, executable outcomes) — so the next free number is `migration_017`. If you're
 adding a new migration file, check what's actually in `db/` rather than trusting either
 document's numbering, this line included.

@@ -67,3 +67,49 @@ def test_single_observation_has_no_usable_interval():
 ])
 def test_matches_the_live_numbers(n, avg, sd, expected):
     assert one(n=n, avg=avg, sd=sd)["verdict"] == expected
+
+
+# ---------------------------------------------------------------- net R, clustered by day
+
+from datetime import date, timedelta
+
+
+def sig(day, r, gross=None, cost=0.1):
+    return {"signal_date": date(2026, 7, 1) + timedelta(days=day), "r_net": r,
+            "r_multiple": r + cost if gross is None else gross, "cost_r": cost, "outcome": "x"}
+
+
+def test_same_day_signals_are_one_observation_not_several():
+    """rsi_overbought's 90 signals came from 38 days; the iid interval was far too tight."""
+    spread = [sig(d, v) for d, v in enumerate([1.0, -0.6] * 15)]           # 30 separate days
+    clumped = [sig(d // 5, v) for d, v in enumerate(                        # 6 days of 5 alike
+        [1.0] * 5 + [-0.6] * 5 + [1.0] * 5 + [-0.6] * 5 + [1.0] * 5 + [-0.6] * 5)]
+    a = es._finish([es.summarise(spread, "a")])[0]
+    b = es._finish([es.summarise(clumped, "b")])[0]
+    assert a["avg_r"] == b["avg_r"] and b["days"] == 6
+    assert b["ci"] > 2 * a["ci"]
+
+
+def test_too_few_distinct_days_is_never_a_verdict():
+    rows = [sig(d // 4, 0.5 + 0.01 * d) for d in range(4 * (es.MIN_DAYS - 1))]
+    r = es._finish([es.summarise(rows, "x")])[0]
+    assert r["n"] >= es.MIN_SAMPLE and r["days"] == es.MIN_DAYS - 1
+    assert r["verdict"] == "too few"
+
+
+def test_net_is_judged_and_gross_and_costs_are_reported():
+    rows = [sig(d, 0.05) for d in range(30)]
+    r = es._finish([es.summarise(rows, "x")])[0]
+    assert r["avg_r"] == 0.05 and r["avg_gross_r"] == 0.15 and r["avg_cost_r"] == 0.1
+
+
+def test_unscored_rows_are_open_not_zero():
+    rows = [sig(d, 0.2) for d in range(3)] + [{"signal_date": date(2026, 7, 9), "r_net": None,
+                                               "r_multiple": None, "cost_r": None, "outcome": None}]
+    s = es.summarise(rows, "x")
+    assert s["n"] == 3 and s["still_open"] == 1 and s["avg_r"] == 0.2
+
+
+def test_one_day_of_signals_has_no_interval():
+    s = es._finish([es.summarise([sig(0, 0.5), sig(0, 0.7)], "x")])[0]
+    assert s["ci"] is None and s["verdict"] == "too few"

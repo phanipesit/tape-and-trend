@@ -10,15 +10,17 @@ def performance_rules(days: int = 3650):
     """Per-rule expectancy with 95% confidence intervals, split by market regime."""
     return rule_stats(days)
 
-# A win is a positive R, not specifically a target hit: an `expired` trade that closed
-# up made money and was previously counted as a loss, understating every win rate here.
-_COLS = """COUNT(*) FILTER (WHERE outcome IS NOT NULL)      AS n,
+# R here is r_net — executable fills after costs (signal_eval.score_executable), the
+# same figure /edge judges by. A win is a positive R, not specifically a target hit:
+# an `expired` trade that closed up made money and was previously counted as a loss,
+# understating every win rate here.
+_COLS = """COUNT(r_net)                                     AS n,
            COUNT(*) FILTER (WHERE outcome IS NULL)          AS open,
-           COUNT(*) FILTER (WHERE r_multiple > 0)           AS wins,
-           ROUND(AVG(r_multiple), 2)                        AS avg_r,
-           ROUND(MAX(r_multiple), 2)                        AS best_r,
-           ROUND(MIN(r_multiple), 2)                        AS worst_r,
-           ROUND(SUM(r_multiple), 2)                        AS total_r"""
+           COUNT(*) FILTER (WHERE r_net > 0)                AS wins,
+           ROUND(AVG(r_net), 2)                             AS avg_r,
+           ROUND(MAX(r_net), 2)                             AS best_r,
+           ROUND(MIN(r_net), 2)                             AS worst_r,
+           ROUND(SUM(r_net), 2)                             AS total_r"""
 
 def _agg(group_expr: str, days: int) -> list[dict]:
     rows = q(f"""SELECT {group_expr} AS grp, {_COLS}

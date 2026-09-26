@@ -6,15 +6,26 @@ weekend/restart re-runs don't duplicate. Each rule gets its own ATR plan in the
 rule's direction (a SELL rule is scored as a short even when the engine's net
 plan is long) so /edge measures each rule on its own merits.
 
-evaluate_open(): walks open rows forward bar by bar — stop or target hit first
-wins (stop assumed first when both fall in one bar), else expired at the close
-after EXPIRE_BARS bars. R is signed: -1.0 = full stop, +2.0 = twice the risk.
+evaluate_open(): scores each row the way it could actually have been traded
+(score_executable): entered at the next session's open, the first price a signal
+can be acted on; stop or target hit first wins (stop assumed first when both fall
+in one bar), and a gap through either fills at the open rather than at the level;
+else expired at the close after EXPIRE_BARS bars. R is signed: -1.0 = full stop.
+`r_net` is R after round-trip costs and slippage, and it is what /edge and the
+playbook judge a rule by.
+
+Why executable and net: scored from the signal bar's own close with gap-free stops
+and no costs, the system read -0.10R a trade; scored executably it is -0.20R, and
+the one rule graded TRADE (rsi_overbought, +0.36R) fell to +0.22R with an interval
+spanning zero (measured 2026-09-26). An edge that only exists at a price nobody can
+be filled at, before costs, is not an edge.
 """
 import logging
 from datetime import date
 from functools import lru_cache
 
 from ..db import q
+from .costs import round_trip_pct
 from .data import all_symbols, get_candles, get_index_symbol, session_open
 from .indicators import sma
 from .signals import analyse, analyse_df, STOP_ATR, TARGET_ATR
@@ -23,6 +34,13 @@ log = logging.getLogger(__name__)
 
 EXPIRE_BARS = 20
 REGIME_SMA = 200
+
+# Bump when the scoring method changes: evaluate_open() re-scores every row whose
+# `scoring` differs, so history is never left mixing two definitions of R.
+SCORING_VERSION = "exec-v1"
+# Per side, on top of statutory costs. A market order at the open is where spreads are
+# widest, so this is deliberately not zero.
+SLIPPAGE_BPS = 10
 
 
 @lru_cache(maxsize=8)
@@ -174,6 +192,10 @@ def score_signal(direction: str, entry: float, stop: float, target: float, after
     Returns {outcome, exit_price, exit_date, bars_held, r_multiple} once resolved,
     or None while the signal is still open (or unscorable). Stop wins when stop and
     target both fall inside one bar; r_multiple is signed and risk-normalised.
+
+    When bars carry an open (`o`), a bar that *opens* beyond a level fills at the open:
+    a stock that gaps 4% through its stop overnight loses more than 1R, and one that
+    gaps through its target earns the gap. Without this every stop read exactly -1.00R.
     """
     after = after.head(EXPIRE_BARS)
     if after.empty:
@@ -184,9 +206,18 @@ def score_signal(direction: str, entry: float, stop: float, target: float, after
         return None
     outcome = exit_price = exit_date = None
     bars = 0
+    has_open = "o" in after.columns
     for _, row in after.iterrows():
         bars += 1
         h, l = float(row.h), float(row.l)
+        if has_open:
+            o = float(row.o)
+            if (o <= stop if is_long else o >= stop):
+                outcome, exit_price, exit_date = "stop_hit", o, row.d
+                break
+            if (o >= target if is_long else o <= target):
+                outcome, exit_price, exit_date = "target_hit", o, row.d
+                break
         if (l <= stop if is_long else h >= stop):
             outcome, exit_price, exit_date = "stop_hit", stop, row.d
             break
@@ -202,25 +233,71 @@ def score_signal(direction: str, entry: float, stop: float, target: float, after
     return {"outcome": outcome, "exit_price": exit_price, "exit_date": exit_date,
             "bars_held": bars, "r_multiple": round(r, 2)}
 
+def cost_fraction(market: str | None) -> float:
+    """Round trip as a fraction of turnover: statutory costs plus slippage both sides.
+    Indian shorts are costed as delivery, which overstates them slightly (a stock-futures
+    short pays less STT) — conservative, and a rule has to survive it either way."""
+    return round_trip_pct(100_000, market or "IN") / 100 + 2 * SLIPPAGE_BPS / 10_000
+
+
+def score_executable(direction: str, atr: float, after, cost_frac: float) -> dict | None:
+    """Score a signal as it could have been traded. Pure.
+
+    Entry is the open of the first bar after the signal, and stop/target are re-based on
+    that fill with the same ATR multiples — the plan a trader would actually place. The
+    walk starts on that same bar, since the stop is live from the fill onward."""
+    if after is None or after.empty or not atr:
+        return None
+    entry = float(after.iloc[0].o)
+    is_long = direction == "LONG"
+    risk = STOP_ATR * atr
+    stop = entry - risk if is_long else entry + risk
+    target = entry + TARGET_ATR * atr if is_long else entry - TARGET_ATR * atr
+    res = score_signal(direction, entry, stop, target, after)
+    if res is None:
+        return None
+    cost_r = cost_frac * entry / risk
+    res.update(fill_entry=entry, cost_r=round(cost_r, 3),
+               r_net=round(res["r_multiple"] - cost_r, 3))
+    return res
+
+
 def evaluate_open() -> int:
+    """Score open rows, and re-score any row scored under an older method."""
     rows = q("""SELECT * FROM signal_outcomes
-                WHERE outcome IS NULL AND signal_date < CURRENT_DATE
-                ORDER BY signal_date""")
+                WHERE (outcome IS NULL OR scoring IS DISTINCT FROM :v)
+                  AND signal_date < CURRENT_DATE
+                ORDER BY signal_date""", v=SCORING_VERSION)
     scored = 0
+    # Deep enough for any row being re-scored, cached per symbol: a re-score walks
+    # hundreds of rows per name. A fixed recent window (it was the last 80 bars) is
+    # only safe for open rows — an older signal would silently be walked from whatever
+    # bar the window happened to start at.
+    candles: dict[str, object] = {}
     for sig in rows:
         try:
-            df = get_candles(sig["symbol"], limit=EXPIRE_BARS + 60, auto=False)
-            if df.empty:
+            if sig["symbol"] not in candles:
+                candles[sig["symbol"]] = get_candles(sig["symbol"], limit=2000, auto=False)
+            df = candles[sig["symbol"]]
+            if df.empty or sig["signal_date"] not in set(df["d"]):
                 continue
-            res = score_signal(sig["direction"], float(sig["entry"]), float(sig["stop"]),
-                               float(sig["target"]), df[df["d"] > sig["signal_date"]])
+            res = score_executable(sig["direction"], float(sig["atr"] or 0),
+                                   df[df["d"] > sig["signal_date"]], cost_fraction(sig["market"]))
             if res is None:
+                # Not resolvable yet. A row scored under an older method goes back to
+                # open rather than keeping a result the current method wouldn't give.
+                if sig["outcome"] is not None:
+                    q("""UPDATE signal_outcomes SET outcome=NULL, exit_price=NULL,
+                           exit_date=NULL, bars_held=NULL, r_multiple=NULL, fill_entry=NULL,
+                           cost_r=NULL, r_net=NULL, scoring=NULL WHERE id=:i""", i=sig["id"])
                 continue
             q("""UPDATE signal_outcomes
-                 SET outcome=:o, exit_price=:e, exit_date=:d, bars_held=:b, r_multiple=:r
+                 SET outcome=:o, exit_price=:e, exit_date=:d, bars_held=:b, r_multiple=:r,
+                     fill_entry=:f, cost_r=:c, r_net=:n, scoring=:v
                  WHERE id=:i""",
               o=res["outcome"], e=round(res["exit_price"], 4), d=res["exit_date"],
-              b=res["bars_held"], r=res["r_multiple"], i=sig["id"])
+              b=res["bars_held"], r=res["r_multiple"], f=round(res["fill_entry"], 4),
+              c=res["cost_r"], n=res["r_net"], v=SCORING_VERSION, i=sig["id"])
             scored += 1
         except Exception:
             log.warning("signal eval failed for id=%s (%s)", sig["id"], sig["symbol"], exc_info=True)
