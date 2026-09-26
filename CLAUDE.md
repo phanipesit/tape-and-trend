@@ -306,6 +306,25 @@ benchmark itself killed for memory pressure mid-run. Treat `?deep=true` as a sto
 servers-first tool, not something to reach for mid-session, and `ollama stop <model>` to
 hand the memory back — Ollama holds a model resident for minutes after the last call.
 
+**Size the catch-up window against how long the machine might sleep, not how often the
+job is scheduled.** Those are unrelated numbers and only the first decides what survives.
+`scripts/daily-snapshot.py` reconstructs `CATCH_UP_SESSIONS` sessions on every run, which
+is what makes a missed day cost nothing — but the laptop slept from 2026-09-06 to 09-26,
+exactly 14 trading sessions, and the window was 15. Everything was recovered with one
+session of margin. The task's `StartWhenAvailable` fires a single catch-up on wake rather
+than one run per missed day, so the window is the *only* thing standing between a long
+sleep and permanent loss. It is now 60, about a quarter; raising it from 15 immediately
+recovered 21 signals that earlier gaps had already eaten. A full run takes 45s against a
+2h limit, so there is room to raise it again — the real ceiling is cached candle depth
+(534 bars per symbol on average).
+
+**Flows are the exception that no window can heal.** NSE publishes only the latest
+trading day, so `institutional_flows` lost all 14 sessions of that outage and holds
+2026-09-04 then 2026-09-25. The task now has `WakeToRun` set so it runs on the day, but
+Windows honours wake timers **on AC only** — the Balanced scheme disables them on
+battery, which is the right default for a laptop and means a sleeping-on-battery machine
+still loses flow days.
+
 **Quality screen** (`services/quality.py`) is seven accounting tests that *exclude*
 companies, adapted from ai-berkshire (MIT). It is deliberately the one feature here that
 reports no expectancy: swing outcomes resolve in 10-20 bars and can be scored, quality

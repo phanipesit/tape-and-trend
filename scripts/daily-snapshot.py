@@ -33,10 +33,20 @@ from zoneinfo import ZoneInfo
 BACKEND = Path(__file__).resolve().parents[1] / "backend"
 LOG = Path(r"C:\users\phani\claude_code\files\signal-tracker.log")
 
-# Sessions reconstructed on every run, so a fortnight of missed runs still heals. Cheap:
-# ~0.1s per symbol per 30 sessions, and re-inserting an existing row is a no-op via the
-# table's UNIQUE constraint. Two weeks of trading days with room to spare.
-CATCH_UP_SESSIONS = 15
+# Sessions reconstructed on every run, so a long outage still heals. Cheap: ~0.1s per
+# symbol per 30 sessions, and re-inserting an existing row is a no-op via the table's
+# UNIQUE constraint.
+#
+# Was 15, described as "two weeks with room to spare". There was no room: the laptop
+# slept from 2026-09-06 to 09-26, which is exactly 14 trading sessions, and the single
+# catch-up run on wake reconstructed all of them with one session to spare. One more
+# trading day and the oldest would have been unrecoverable. The window has to be sized
+# against how long the machine might be shut, not against how often the job is scheduled
+# — those are unrelated numbers, and only the first one decides what survives.
+#
+# 60 covers roughly a quarter. The real ceiling is cached candle depth, which is 534 bars
+# per symbol on average, so there is room to raise this again if an outage ever needs it.
+CATCH_UP_SESSIONS = 60
 
 # config.py's bare load_dotenv() searches the cwd upward and so never finds
 # backend/.env from anywhere else — Task Scheduler starts in system32, where that means
