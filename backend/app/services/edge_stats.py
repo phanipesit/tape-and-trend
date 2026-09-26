@@ -86,3 +86,19 @@ def rule_stats(days: int = 3650) -> dict:
         "by_market": _group("market", days),
         "by_rule_regime": by_rule_regime,
     }
+
+
+def edge_book(days: int = 3650) -> dict:
+    """Every rule's record, keyed (setup_tag, regime) and (setup_tag, None) for the
+    all-regime pool. Unlike rule_stats() nothing is filtered by sample size here: the
+    caller decides which cell is deep enough to trust, and needs the thin ones to say
+    *why* it fell back."""
+    book = {}
+    for r in _finish(q(f"""SELECT setup_tag AS grp, regime, {_STATS}
+                           FROM signal_outcomes
+                           WHERE signal_date >= CURRENT_DATE - :days AND regime IS NOT NULL
+                           GROUP BY 1, 2""", days=days)):
+        book[(r["grp"], r["regime"])] = r
+    for r in _group("setup_tag", days):
+        book[(r["grp"], None)] = r
+    return book

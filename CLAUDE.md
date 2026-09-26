@@ -132,6 +132,20 @@ entry/stop/target that follows the dominant `direction` (`LONG`/`SHORT`; long wh
 edge, so the risk calculator can always load a plan) — this is the shared building block for
 the signals page, Today's Focus, the screener's ranking, and alerts.
 
+**The signals page and Today's Focus rank by measured edge, not by `score`**
+(`services/playbook.py`). On 863 scored outcomes the conviction score did not predict
+anything — the 6-8 bucket averaged -0.56R, worse than 2-4's -0.02R — and the system as a
+whole ran -0.094R with its 95% interval below zero. So `grade()` looks up the record of
+the *rule that fired*, in the regime it fired in (`edge_stats.edge_book()`), falling back
+to the all-regime pool when that cell is under `MIN_SAMPLE`, because the same rule flips
+sign across regimes (breakout_20d: +0.47R risk-off, -0.29R risk-on). Grades are TRADE
+(interval clears zero) / PAPER (leans ≥ `PAPER_MIN_R`, roughly one round trip of costs) /
+UNPROVEN / SKIP. The plan is rebuilt from the best-graded rule in *its own* direction,
+since that is the plan `signal_eval` scored — the engine's net plan can point the other
+way. The engine itself is untouched: SKIP rules keep firing and being logged, which is
+the only way one can earn its way back. `/api/signals/desk` is the page header — regime
+per market, system expectancy, and which rules are live in the current tape.
+
 **Day trading is a parallel indicator/signal stack, not a variant of the swing one.**
 `enrich_intraday(df, interval)` (in `indicators.py`, separate from `enrich()` since
 VWAP's session-reset grouping — by UTC date, safe because NSE/US session hours don't

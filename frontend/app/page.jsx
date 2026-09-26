@@ -4,7 +4,7 @@ import Link from "next/link";
 import FlowsStrip from "../components/FlowsStrip";
 import GlobalMarkets from "../components/GlobalMarkets";
 import NewsWire from "../components/NewsWire";
-import { api, fmt } from "../lib/api";
+import { api, edgeLine, fmt, gradeTone } from "../lib/api";
 
 export default function Dashboard() {
   const [sigs, setSigs] = useState([]);
@@ -14,7 +14,8 @@ export default function Dashboard() {
   const [adding, setAdding] = useState(false);
 
   const load = () => {
-    api("/api/signals").then((r) => { setSigs(r.sort((a, b) => b.score - a.score)); setErr(""); })
+    // already ranked by services/playbook.py; SKIP rules have lost money, so they never make the focus
+    api("/api/signals").then((r) => { setSigs(r.filter((a) => a.playbook?.grade !== "SKIP")); setErr(""); })
       .catch((e) => setErr(String(e)));
     api("/api/alerts").then((r) => setAlerts(r.filter((a) => a.triggered_at))).catch(() => {});
   };
@@ -50,27 +51,28 @@ export default function Dashboard() {
       <div className="grid md:grid-cols-2 gap-4">
         <NewsWire />
         <div className="card">
-          <h2 className="font-semibold mb-2">Today's focus <span className="text-dim text-xs font-normal">top 3 by conviction score</span></h2>
-          {sigs.length === 0 && <p className="text-dim text-sm">No rules triggered on the latest bar.</p>}
-          {sigs.slice(0, 3).map((a) => (
+          <h2 className="font-semibold mb-2">Today's focus <span className="text-dim text-xs font-normal">top 3 by measured rule edge</span></h2>
+          {sigs.length === 0 && <p className="text-dim text-sm">No setup with a live or unproven rule on the latest bar.</p>}
+          {sigs.slice(0, 3).map((a) => {
+            const p = a.playbook || {};
+            return (
             <div key={a.symbol} className="py-2 border-b border-line">
               <div className="flex justify-between items-center">
                 <div>
                   <Link className="font-mono font-bold hover:text-brass" href={`/charts?symbol=${a.symbol}`}>{a.symbol}</Link>
-                  <span className="text-dim text-[10px] font-mono ml-2">score {fmt(a.score, 1)} · rvol {fmt(a.rvol, 1)}</span>
-                  <p className="text-mut text-xs">{a.signals[0].why}</p>
+                  <span className="text-dim text-[10px] font-mono ml-2">{p.rule || "watch"} · {edgeLine(p.edge)}</span>
+                  <p className="text-mut text-xs">{p.why}</p>
                 </div>
-                <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${
-                  a.signals[0].type === "BUY" ? "border-up text-up" :
-                  a.signals[0].type === "SELL" ? "border-down text-down" : "border-brass text-brass"}`}>
-                  {a.signals[0].type}</span>
+                <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${gradeTone(p.grade)}`}>{p.grade}</span>
               </div>
-              <p className="font-mono text-[11px] text-dim mt-1">
-                {a.direction === "SHORT" && <b className="text-down">SHORT · </b>}
-                entry {fmt(a.entry)} · stop {fmt(a.stop)} · target {fmt(a.target)} ·{" "}
-                <Link href={`/risk?symbol=${a.symbol}&entry=${a.entry}&stop=${a.stop}&target=${a.target}`}
-                  className="text-brass hover:underline">size it →</Link></p>
-            </div>))}
+              {p.rule && (
+                <p className="font-mono text-[11px] text-dim mt-1">
+                  {p.direction === "SHORT" && <b className="text-down">SHORT · </b>}
+                  entry {fmt(p.entry)} · stop {fmt(p.stop)} · target {fmt(p.target)} ·{" "}
+                  <Link href={`/risk?symbol=${a.symbol}&entry=${p.entry}&stop=${p.stop}&target=${p.target}`}
+                    className="text-brass hover:underline">size it →</Link></p>)}
+            </div>);
+          })}
           {sigs.length > 3 && <Link href="/signals" className="ghost inline-block mt-2">All {sigs.length} setups →</Link>}
         </div>
       </div>

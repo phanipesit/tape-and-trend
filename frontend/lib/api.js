@@ -47,3 +47,16 @@ export const ago = (iso) => {
 
 export const fmt = (n, dp = 2) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: dp, minimumFractionDigits: dp });
+
+// Colour for a playbook grade (services/playbook.py GRADES) — the one place that maps
+// a grade to the palette, so the dashboard and the signal desk can't disagree.
+export const gradeTone = (g) =>
+  g === "TRADE" ? "border-up text-up"
+  : g === "PAPER" ? "border-info text-info"
+  : g === "SKIP" ? "border-down text-down"
+  : "border-line2 text-dim";
+
+// "+0.47R [0.04, 0.90] · n=40" — a rule's measured record, interval always attached.
+export const edgeLine = (e) =>
+  !e || e.avg_r == null ? "no scored outcomes"
+  : `${e.avg_r >= 0 ? "+" : ""}${fmt(e.avg_r)}R [${fmt(e.ci_low)}, ${fmt(e.ci_high)}] · n=${e.n}`;
