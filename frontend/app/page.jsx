@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import FlowsStrip from "../components/FlowsStrip";
+import Bonds from "../components/Bonds";
 import GlobalMarkets from "../components/GlobalMarkets";
 import NewsWire from "../components/NewsWire";
 import { api, edgeLine, fmt, gradeTone } from "../lib/api";
@@ -41,6 +42,7 @@ export default function Dashboard() {
       </div>
       {err && <div className="card border-down text-down text-sm">Backend unreachable — is uvicorn running on :8000? {err}</div>}
       <GlobalMarkets />
+      <Bonds />
       <FlowsStrip />
       {alerts.length > 0 && (
         <div className="card border-brass text-sm">

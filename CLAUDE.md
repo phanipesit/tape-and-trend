@@ -25,6 +25,10 @@ psql -d tapetrend -f db/migration_008_niftybank.sql       # ^NSEBANK index row
 psql -d tapetrend -f db/migration_009_intraday.sql        # intraday_ohlcv table
 psql -d tapetrend -f db/migration_010_global_markets.sql # asset_class/region + world indices, metals, macro
 psql -d tapetrend -f db/migration_011_option_chain.sql   # cached NSE option chain (implied vol)
+psql -d tapetrend -f db/migration_012_signal_regime.sql  # regime column on signal_outcomes
+psql -d tapetrend -f db/migration_013_institutional_flows.sql # daily FII/DII flows
+psql -d tapetrend -f db/migration_014_fundamentals_history.sql # statements for the quality screen
+psql -d tapetrend -f db/migration_015_bond_yields.sql   # FBIL G-Sec curve + US Treasury rows
 ```
 Run every migration in order — skipping any leaves tables that feature code reads at
 request time missing. `main.py`'s startup check logs an error naming each absent table.
@@ -82,7 +86,7 @@ FastAPI (backend/app/)
    config.py             — env vars via python-dotenv
    ▼
 PostgreSQL: symbols · ohlcv · intraday_ohlcv · watchlist · portfolio_tx · backtest_runs ·
-            alerts · signal_outcomes · rotation_runs (+ whatever each migration_NNN.sql under db/ adds)
+            alerts · signal_outcomes · rotation_runs · bond_yields (+ whatever each migration_NNN.sql under db/ adds)
 ```
 
 **Router ↔ service split is the core convention.** Routers under `backend/app/routers/`
@@ -219,6 +223,22 @@ futures would have appeared in every stock dropdown. Foreign venues use `market=
 (the CHECK constraint was widened); `yf_symbol()` only special-cases `'IN'`, so anything
 else passes the ticker through unchanged, which is what Yahoo wants for `^FTSE`/`^N225`/
 `000001.SS`.
+
+**Bond yields** (`services/bonds.py`, migration_015) sit under the global board as their
+own card. The two markets arrive by different routes. US Treasuries (`^IRX/^FVX/^TNX/^TYX`)
+are ordinary `symbols` rows with `asset_class='bond'`, cached in `ohlcv` via data.py like
+any board symbol. India has **no yield on Yahoo under any ticker**, and NSE's G-sec feed is
+retail cash-market prints (a 100-unit trade at its price band), not a benchmark. So India
+comes from **FBIL's par yield curve**, the official G-Sec benchmark: one xlsx per date from
+`/wasdm/gsec/downloadPublished?date=`, parsed with zipfile + ElementTree (no openpyxl), and
+stored whole in `bond_yields`, 3M–40Y. **FBIL's public archive list trails by about a week**.
+Later files download if you ask by name, but only listed dates are fetched, because the list
+is what FBIL publishes to unauthenticated users. So the board reports `lag_days`, and the
+India–US spread is taken **on India's date**. Pairing a week-old curve with today's Treasury
+close was off by 18bp on the day it was built. Moves are **basis points, never percent**.
+The cross-market slope is 10Y−3M because it is the only pair both sources carry. The
+archive goes back to 2024, so unlike flows a missed day heals: `refresh_in` diffs listed
+dates against stored ones, and `scripts/daily-snapshot.py` runs it.
 
 **Implied volatility** (`services/nse_chain.py`, migration_011) replaced realized vol as the
 *primary* input to options pricing. NSE publishes IV free; two things about the endpoint are
@@ -442,6 +462,6 @@ describes a *different* migration (journal/risk/alerts schema changes) as "migra
 journal columns the phantom "migration_002" was supposed to create), and
 `migration_006_signal_outcomes.sql`, `migration_007_rotation.sql`,
 `migration_008_niftybank.sql`, `migration_009_intraday.sql`, and
-`migration_010_global_markets.sql`, and `migration_011_option_chain.sql` — so the next free number is `migration_012`. If you're
+`migration_010_global_markets.sql`, `migration_011_option_chain.sql`, and 012–015 (signal regime, institutional flows, fundamentals history, bond yields) — so the next free number is `migration_016`. If you're
 adding a new migration file, check what's actually in `db/` rather than trusting either
 document's numbering, this line included.

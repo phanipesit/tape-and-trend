@@ -88,6 +88,16 @@ def main() -> int:
     except Exception as e:
         parts.append(f"flows=FAILED({type(e).__name__}: {str(e)[:60]})")
 
+    # Bond yields. Unlike flows, FBIL keeps an archive, so a missed day heals on the next
+    # run — refresh_in downloads only the listed dates not yet stored. It lives here for
+    # the same reason chains do: the board reads cache only, and nothing else drives it.
+    try:
+        from app.services.bonds import refresh as refresh_bonds
+        b = refresh_bonds()
+        parts.append(f"bonds[IN]={b['IN'].get('stored', b['IN'])} bonds[US]={b['US'].get('refreshed', b['US'])}")
+    except Exception as e:
+        parts.append(f"bonds=FAILED({type(e).__name__}: {str(e)[:60]})")
+
     # Option chains refresh only when someone opens the Options page, so ^NSEI sat on a
     # 2026-08-03 fetch for a month while the lab happily priced off it. The staleness
     # window exists but nothing drives it. Only the index underlyings: those are the ones
